@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: govpay
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          env:
+            - name: GOVPAY_ADDR
+              value: {{ .Values.env.GOVPAY_ADDR | quote }}
+            - name: GOVPAY_BASIC_USER
+              value: {{ .Values.env.GOVPAY_BASIC_USER | quote }}
+            - name: GOVPAY_BASIC_PASS
+              value: {{ .Values.env.GOVPAY_BASIC_PASS | quote }}
+            - name: GOVPAY_TOKEN_TTL_SECONDS
+              value: {{ .Values.env.GOVPAY_TOKEN_TTL_SECONDS | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
