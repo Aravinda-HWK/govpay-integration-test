@@ -8,8 +8,6 @@ service:
 
 env:
   GOVPAY_ADDR: ":8080"
-  GOVPAY_BASIC_USER: "govpay"
-  GOVPAY_BASIC_PASS: "govpay"
   GOVPAY_TOKEN_TTL_SECONDS: "3600"
 
 route:
