@@ -15,6 +15,10 @@ export GOVPAY_BASIC_PASS="govpay"
 export GOVPAY_TOKEN_TTL_SECONDS=3600
 ```
 
+Notes:
+- Presentment response is built dynamically from the request `data[]` array.
+- Payment update response echoes request `data[]` and adds receipt/status labels.
+
 ## Endpoints
 
 Base URL: http://localhost:8080

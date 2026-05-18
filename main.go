@@ -48,11 +48,11 @@ type PresentmentRequest struct {
 }
 
 type PresentmentResponse struct {
-	TransactionID  string               `json:"transactionId"`
-	SubInstID      string               `json:"subinstId"`
-	ServiceID      string               `json:"serviceId"`
-	ServiceName    string               `json:"serviceName"`
-	Message        string               `json:"message"`
+	TransactionID   string              `json:"transactionId"`
+	SubInstID       string              `json:"subinstId"`
+	ServiceID       string              `json:"serviceId"`
+	ServiceName     string              `json:"serviceName"`
+	Message         string              `json:"message"`
 	PresentmentData []PresentmentObject `json:"presentmentData"`
 }
 
@@ -109,22 +109,22 @@ type UpdateResponse struct {
 }
 
 type PaymentItem struct {
-	ObjType       string         `json:"objType"`
-	Seq           string         `json:"seq"`
-	ID            string         `json:"id"`
-	Placeholder   string         `json:"placeholder"`
-	InitialValue  interface{}    `json:"initialValue"`
-	DataType      string         `json:"datatype"`
-	MaxLength     int            `json:"maxLength"`
-	SelectionType string         `json:"selectionType"`
-	Mask          string         `json:"mask"`
-	NotNull       string         `json:"notNull"`
-	Enabled       string         `json:"enabled"`
-	Returned      string         `json:"returned"`
-	Rows          int            `json:"rows"`
-	Cols          int            `json:"cols"`
-	ReturnParam   string         `json:"returnParam"`
-	ReturnValue   string         `json:"returnValue"`
+	ObjType       string           `json:"objType"`
+	Seq           string           `json:"seq"`
+	ID            string           `json:"id"`
+	Placeholder   string           `json:"placeholder"`
+	InitialValue  interface{}      `json:"initialValue"`
+	DataType      string           `json:"datatype"`
+	MaxLength     int              `json:"maxLength"`
+	SelectionType string           `json:"selectionType"`
+	Mask          string           `json:"mask"`
+	NotNull       string           `json:"notNull"`
+	Enabled       string           `json:"enabled"`
+	Returned      string           `json:"returned"`
+	Rows          int              `json:"rows"`
+	Cols          int              `json:"cols"`
+	ReturnParam   string           `json:"returnParam"`
+	ReturnValue   string           `json:"returnValue"`
 	TableData     *TableDataObject `json:"tableData,omitempty"`
 }
 
@@ -224,12 +224,12 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 		}
 
 		resp := PresentmentResponse{
-			TransactionID:  req.TransactionID,
-			SubInstID:      req.SubInstID,
-			ServiceID:      req.ServiceID,
-			ServiceName:    req.ServiceName,
-			Message:        "Success",
-			PresentmentData: []PresentmentObject{},
+			TransactionID:   req.TransactionID,
+			SubInstID:       req.SubInstID,
+			ServiceID:       req.ServiceID,
+			ServiceName:     req.ServiceName,
+			Message:         "Success",
+			PresentmentData: buildPresentmentData(req.Data),
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -266,7 +266,7 @@ func updateHandler(cfg Config) http.HandlerFunc {
 			ServiceID:     req.ServiceID,
 			ServiceName:   req.ServiceName,
 			Message:       "Success",
-			PaymentData:   []PaymentItem{},
+			PaymentData:   buildPaymentData(req.Data, req.TransactionID),
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -325,6 +325,148 @@ func parsePresentmentRequest(r *http.Request) (PresentmentRequest, error) {
 		ServiceName:   serviceName,
 		Data:          data,
 	}, nil
+}
+
+func buildPresentmentData(params []Param) []PresentmentObject {
+	objects := make([]PresentmentObject, 0, len(params))
+	for i, param := range params {
+		seq := strings.TrimSpace(param.Seq)
+		if seq == "" {
+			seq = fmt.Sprintf("%d", i+1)
+		}
+		paramName := strings.TrimSpace(param.ParamName)
+		if paramName == "" {
+			paramName = fmt.Sprintf("param_%d", i+1)
+		}
+
+		dataType := "text"
+		objType := "label"
+		maxLength := 50
+		if isDecimalValue(param.Value) || strings.Contains(strings.ToLower(paramName), "amount") {
+			dataType = "decimal"
+			objType = "textbox"
+			maxLength = 13
+		}
+
+		objects = append(objects, PresentmentObject{
+			ObjType:       objType,
+			Seq:           seq,
+			ID:            fmt.Sprintf("%03d%04d", i+1, i+1),
+			Placeholder:   paramName,
+			InitialValue:  param.Value,
+			DataType:      dataType,
+			MaxLength:     maxLength,
+			SelectionType: "SINGLE",
+			Mask:          "",
+			NotNull:       "true",
+			Enabled:       boolToFlag(objType == "textbox"),
+			Returned:      "true",
+			Rows:          1,
+			Cols:          1,
+			ReturnParam:   paramName,
+			ReturnValue:   "",
+			ObjData:       []ComboItem{},
+		})
+	}
+	return objects
+}
+
+func isDecimalValue(value interface{}) bool {
+	switch value.(type) {
+	case float32, float64, int, int32, int64, uint, uint32, uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildPaymentData(params []Param, transactionID string) []PaymentItem {
+	items := make([]PaymentItem, 0, len(params)+2)
+	for i, param := range params {
+		seq := strings.TrimSpace(param.Seq)
+		if seq == "" {
+			seq = fmt.Sprintf("%d", i+1)
+		}
+		paramName := strings.TrimSpace(param.ParamName)
+		if paramName == "" {
+			paramName = fmt.Sprintf("param_%d", i+1)
+		}
+
+		items = append(items, PaymentItem{
+			ObjType:       "label",
+			Seq:           seq,
+			ID:            fmt.Sprintf("%03d%04d", i+1, i+1),
+			Placeholder:   paramName,
+			InitialValue:  param.Value,
+			DataType:      valueDataType(param.Value),
+			MaxLength:     50,
+			SelectionType: "SINGLE",
+			Mask:          "",
+			NotNull:       "true",
+			Enabled:       "false",
+			Returned:      "false",
+			Rows:          1,
+			Cols:          1,
+			ReturnParam:   "",
+			ReturnValue:   "",
+		})
+	}
+
+	receiptSeq := fmt.Sprintf("%d", len(items)+1)
+	items = append(items, PaymentItem{
+		ObjType:       "label",
+		Seq:           receiptSeq,
+		ID:            fmt.Sprintf("%03d%04d", len(items)+1, len(items)+1),
+		Placeholder:   "Receipt Number",
+		InitialValue:  fmt.Sprintf("REC-%s", transactionID),
+		DataType:      "text",
+		MaxLength:     50,
+		SelectionType: "SINGLE",
+		Mask:          "",
+		NotNull:       "true",
+		Enabled:       "false",
+		Returned:      "false",
+		Rows:          1,
+		Cols:          1,
+		ReturnParam:   "",
+		ReturnValue:   "",
+	})
+
+	statusSeq := fmt.Sprintf("%d", len(items)+1)
+	items = append(items, PaymentItem{
+		ObjType:       "label",
+		Seq:           statusSeq,
+		ID:            fmt.Sprintf("%03d%04d", len(items)+1, len(items)+1),
+		Placeholder:   "Status",
+		InitialValue:  "Payment recorded",
+		DataType:      "text",
+		MaxLength:     50,
+		SelectionType: "SINGLE",
+		Mask:          "",
+		NotNull:       "true",
+		Enabled:       "false",
+		Returned:      "false",
+		Rows:          1,
+		Cols:          1,
+		ReturnParam:   "",
+		ReturnValue:   "",
+	})
+
+	return items
+}
+
+func valueDataType(value interface{}) string {
+	if isDecimalValue(value) {
+		return "decimal"
+	}
+	return "text"
+}
+
+func boolToFlag(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func getStringField(payload map[string]json.RawMessage, keys ...string) (string, bool, error) {
