@@ -27,6 +27,13 @@ spec:
               value: {{ .Values.env.GOVPAY_BASIC_PASS | quote }}
             - name: GOVPAY_TOKEN_TTL_SECONDS
               value: {{ .Values.env.GOVPAY_TOKEN_TTL_SECONDS | quote }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
