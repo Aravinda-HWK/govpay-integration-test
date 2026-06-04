@@ -80,7 +80,7 @@ type PresentmentObject struct {
 	Returned      string           `json:"returned"`
 	Rows          int              `json:"rows"`
 	Cols          int              `json:"cols"`
-	ReturnParam        string           `json:"returnParam"`
+	ReturnParam        string           `json:"returnedParam"`
 	IsPaymentReference bool             `json:"isPaymentReference,omitempty"`
 	IsPaymentAmount    bool             `json:"isPaymentAmount,omitempty"`
 	ReturnValue        string           `json:"returnValue"`
@@ -134,7 +134,7 @@ type PaymentItem struct {
 	Returned      string           `json:"returned"`
 	Rows          int              `json:"rows"`
 	Cols          int              `json:"cols"`
-	ReturnParam   string           `json:"returnParam"`
+	ReturnParam   string           `json:"returnedParam"`
 	ReturnValue   string           `json:"returnValue"`
 	TableData     *TableDataObject `json:"tableData,omitempty"`
 }
@@ -472,7 +472,7 @@ func buildPresentmentData(refNo string) []PresentmentObject {
 		newPresentmentObject(2, "label", "Taxpayer Name", "John Doe", "text", 50, false, false, "", false, false),
 		newPresentmentObject(3, "label", "Tax Type", "Income Tax", "text", 50, false, false, "", false, false),
 		newPresentmentObject(4, "label", "Billing Period", "2026-Q1", "text", 50, false, false, "", false, false),
-		newPresentmentObject(5, "textbox", "Amount To Be Paid (LKR)", 1500.50, "decimal", 13, false, true, "amount", false, true),
+		newPresentmentObject(5, "textBox", "Amount To Be Paid (LKR)", 1500.50, "decimal", 13, false, true, "amount", false, true),
 	}
 }
 
