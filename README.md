@@ -51,7 +51,7 @@ When deployed on OpenShift the service is exposed over **HTTPS** through an edge
 
 ```bash
 # Deployed on OpenShift (HTTPS):
-export BASE_URL="https://$(oc get route govpay -n govpay -o jsonpath='{.spec.host}')"
+export BASE_URL="https://$(oc get route govpay -n nsw-infra-dev -o jsonpath='{.spec.host}')"
 
 # Or local development (HTTP):
 # export BASE_URL="http://localhost:8080"
@@ -62,11 +62,28 @@ export BASE_URL="https://$(oc get route govpay -n govpay -o jsonpath='{.spec.hos
 
 ### Generate token
 
+The `Authorization` header is HTTP Basic auth carrying the IDP client credentials,
+i.e. `Basic base64(client_id:client_secret)`. Supply your own credentials — do not
+commit them.
+
 ```bash
+# Build the Basic credential from your IDP client_id / client_secret:
+export BASIC_AUTH="$(printf '%s:%s' "$CLIENT_ID" "$CLIENT_SECRET" | base64)"
+
 curl -k -X POST "${BASE_URL}/api/govpayplus/v1.0/generatetoken" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -H "Authorization: Basic $(printf 'govpay:govpay' | base64)" \
+  -H "Authorization: Basic ${BASIC_AUTH}" \
   --data-urlencode "grant_type=client_credentials"
+```
+
+The response contains an `access_token`. Capture it and use it as the `Bearer`
+token for the `/presentment` and `/update` calls below:
+
+```bash
+export ACCESS_TOKEN="$(curl -sk -X POST "${BASE_URL}/api/govpayplus/v1.0/generatetoken" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -H "Authorization: Basic ${BASIC_AUTH}" \
+  --data-urlencode "grant_type=client_credentials" | jq -r '.access_token')"
 ```
 
 ### Payment data presentment
@@ -74,7 +91,7 @@ curl -k -X POST "${BASE_URL}/api/govpayplus/v1.0/generatetoken" \
 ```bash
 curl -k -X POST "${BASE_URL}/api/govpayplus/v1.0/presentment" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer demo-token" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "TransactionKey: demo-transaction-key" \
   -d '{
     "transactionId": "60562345678995555",
@@ -92,7 +109,7 @@ curl -k -X POST "${BASE_URL}/api/govpayplus/v1.0/presentment" \
 ```bash
 curl -k -X POST "${BASE_URL}/api/govpayplus/v1.0/update" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer demo-token" \
+  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "TransactionKey: demo-transaction-key" \
   -d '{
     "transactionId": "60562345678995555",

@@ -80,10 +80,12 @@ type PresentmentObject struct {
 	Returned      string           `json:"returned"`
 	Rows          int              `json:"rows"`
 	Cols          int              `json:"cols"`
-	ReturnParam   string           `json:"returnParam"`
-	ReturnValue   string           `json:"returnValue"`
-	ObjData       []ComboItem      `json:"objData"`
-	TableData     *TableDataObject `json:"tableData,omitempty"`
+	ReturnParam        string           `json:"returnParam"`
+	IsPaymentReference bool             `json:"isPaymentReference,omitempty"`
+	IsPaymentAmount    bool             `json:"isPaymentAmount,omitempty"`
+	ReturnValue        string           `json:"returnValue"`
+	ObjData            []ComboItem      `json:"objData"`
+	TableData          *TableDataObject `json:"tableData,omitempty"`
 }
 
 type ComboItem struct {
@@ -466,18 +468,18 @@ func isAlphaNumeric(s string) bool {
 // the GO in the update request (returned=true, returnParam="amount").
 func buildPresentmentData(refNo string) []PresentmentObject {
 	return []PresentmentObject{
-		newPresentmentObject(1, "label", "Reference Number", refNo, "text", refNoMaxLength, false, true, "refNo"),
-		newPresentmentObject(2, "label", "Taxpayer Name", "John Doe", "text", 50, false, false, ""),
-		newPresentmentObject(3, "label", "Tax Type", "Income Tax", "text", 50, false, false, ""),
-		newPresentmentObject(4, "label", "Billing Period", "2026-Q1", "text", 50, false, false, ""),
-		newPresentmentObject(5, "textbox", "Amount To Be Paid (LKR)", 1500.50, "decimal", 13, false, true, "amount"),
+		newPresentmentObject(1, "label", "Reference Number", refNo, "text", refNoMaxLength, false, true, "refNo", true, false),
+		newPresentmentObject(2, "label", "Taxpayer Name", "John Doe", "text", 50, false, false, "", false, false),
+		newPresentmentObject(3, "label", "Tax Type", "Income Tax", "text", 50, false, false, "", false, false),
+		newPresentmentObject(4, "label", "Billing Period", "2026-Q1", "text", 50, false, false, "", false, false),
+		newPresentmentObject(5, "textbox", "Amount To Be Paid (LKR)", 1500.50, "decimal", 13, false, true, "amount", false, true),
 	}
 }
 
 // newPresentmentObject builds a single presentment object with the common
 // defaults from the GovPay+ spec (§2.4.3.2), varying only the fields a caller
 // cares about.
-func newPresentmentObject(seq int, objType, placeholder string, initialValue interface{}, dataType string, maxLength int, enabled, returned bool, returnParam string) PresentmentObject {
+func newPresentmentObject(seq int, objType, placeholder string, initialValue interface{}, dataType string, maxLength int, enabled, returned bool, returnParam string, isPaymentReference, isPaymentAmount bool) PresentmentObject {
 	return PresentmentObject{
 		ObjType:       objType,
 		Seq:           strconv.Itoa(seq),
@@ -493,9 +495,11 @@ func newPresentmentObject(seq int, objType, placeholder string, initialValue int
 		Returned:      boolToFlag(returned),
 		Rows:          1,
 		Cols:          1,
-		ReturnParam:   returnParam,
-		ReturnValue:   "",
-		ObjData:       []ComboItem{},
+		ReturnParam:        returnParam,
+		IsPaymentReference: isPaymentReference,
+		IsPaymentAmount:    isPaymentAmount,
+		ReturnValue:        "",
+		ObjData:            []ComboItem{},
 	}
 }
 
