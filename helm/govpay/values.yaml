@@ -1,7 +1,9 @@
 image:
-  repository: ghcr.io/<owner>/govpay-integration-test
+  repository: ghcr.io/aravinda-hwk/govpay-integration-test
   tag: "latest"
-  pullPolicy: IfNotPresent
+  # Always re-pull because the "latest" tag is mutable; without this a node
+  # keeps serving its cached image and never picks up a new push.
+  pullPolicy: Always
 
 service:
   port: 8080
@@ -10,9 +12,26 @@ env:
   GOVPAY_ADDR: ":8080"
   GOVPAY_TOKEN_TTL_SECONDS: "3600"
 
+# IDP (OAuth2) integration. Leave values empty to keep local mock-token behaviour.
+idp:
+  # When set, /generatetoken proxies the caller's Basic-auth credentials to this
+  # IDP token endpoint (client_credentials grant) and returns the IDP's token.
+  tokenURL: ""        # e.g. https://apis.leco.lk/oauth2/token
+  # When set, /presentment and /update verify the bearer JWT against this JWKS.
+  jwksURL: ""         # e.g. https://apis.leco.lk/oauth2/jwks
+  # Optional claim checks (skipped when empty).
+  issuer: ""          # expected "iss", e.g. https://mgt.apig.leco.lk:443/oauth2/token
+  audience: ""        # expected "aud", e.g. the client_id
+
 route:
   enabled: true
   host: ""
+  tls:
+    # Edge termination: TLS is terminated at the OpenShift router using the
+    # cluster's default ingress certificate; traffic to the pod stays HTTP on service.port.
+    termination: edge
+    # Redirect any plain HTTP request to HTTPS.
+    insecureEdgeTerminationPolicy: Redirect
 
 resources:
   requests:

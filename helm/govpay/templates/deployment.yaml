@@ -27,6 +27,22 @@ spec:
               value: {{ .Values.env.GOVPAY_BASIC_PASS | quote }}
             - name: GOVPAY_TOKEN_TTL_SECONDS
               value: {{ .Values.env.GOVPAY_TOKEN_TTL_SECONDS | quote }}
+            {{- with .Values.idp.tokenURL }}
+            - name: GOVPAY_IDP_TOKEN_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.idp.jwksURL }}
+            - name: GOVPAY_IDP_JWKS_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.idp.issuer }}
+            - name: GOVPAY_IDP_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.idp.audience }}
+            - name: GOVPAY_IDP_AUDIENCE
+              value: {{ . | quote }}
+            {{- end }}
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu | quote }}

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +21,13 @@ type Config struct {
 	BasicUser       string
 	BasicPass       string
 	TokenTTLSeconds int
+
+	// IDPTokenURL, when set, makes /generatetoken proxy the caller's Basic-auth
+	// credentials to this IDP token endpoint (client_credentials grant).
+	IDPTokenURL string
+	// Verifier, when non-nil, validates the bearer token on /presentment and
+	// /update against the IDP's JWKS.
+	Verifier *idpVerifier
 }
 
 type ErrorResponse struct {
@@ -154,7 +163,21 @@ func loadConfig() Config {
 		BasicUser:       getEnv("GOVPAY_BASIC_USER", "govpay"),
 		BasicPass:       getEnv("GOVPAY_BASIC_PASS", "govpay"),
 		TokenTTLSeconds: getEnvInt("GOVPAY_TOKEN_TTL_SECONDS", 3600),
+		IDPTokenURL:     getEnv("GOVPAY_IDP_TOKEN_URL", ""),
 	}
+
+	if jwksURL := getEnv("GOVPAY_IDP_JWKS_URL", ""); jwksURL != "" {
+		cfg.Verifier = newIDPVerifier(
+			jwksURL,
+			getEnv("GOVPAY_IDP_ISSUER", ""),
+			getEnv("GOVPAY_IDP_AUDIENCE", ""),
+		)
+		log.Printf("IDP token validation enabled (jwks=%s)", jwksURL)
+	}
+	if cfg.IDPTokenURL != "" {
+		log.Printf("IDP token proxy enabled (token endpoint=%s)", cfg.IDPTokenURL)
+	}
+
 	return cfg
 }
 
@@ -175,12 +198,22 @@ func generateTokenHandler(cfg Config) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "Content-Type must be application/x-www-form-urlencoded"})
 			return
 		}
-		if !checkBasicAuth(r, cfg.BasicUser, cfg.BasicPass) {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "invalid authorization"})
-			return
-		}
 		if err := r.ParseForm(); err != nil {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "invalid form"})
+			return
+		}
+
+		// When an IDP token endpoint is configured, forward the caller's
+		// Basic-auth credentials to it as client_id/client_secret and relay the
+		// IDP's token response.
+		if cfg.IDPTokenURL != "" {
+			proxyTokenRequest(cfg, w, r)
+			return
+		}
+
+		// Otherwise issue a local mock token (for local development).
+		if !checkBasicAuth(r, cfg.BasicUser, cfg.BasicPass) {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "invalid authorization"})
 			return
 		}
 		if r.FormValue("grant_type") != "client_credentials" {
@@ -198,6 +231,57 @@ func generateTokenHandler(cfg Config) http.HandlerFunc {
 	}
 }
 
+// proxyTokenRequest forwards a client_credentials token request to the
+// configured IDP, passing the caller's Basic-auth header through as the IDP
+// client credentials, and relays the IDP's response verbatim.
+func proxyTokenRequest(cfg Config, w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Basic ") {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "Basic authorization required"})
+		return
+	}
+
+	grant := r.FormValue("grant_type")
+	if grant == "" {
+		grant = "client_credentials"
+	}
+	form := url.Values{}
+	form.Set("grant_type", grant)
+	if scope := r.FormValue("scope"); scope != "" {
+		form.Set("scope", scope)
+	}
+
+	idpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, cfg.IDPTokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "server_error", Message: "could not build IDP request"})
+		return
+	}
+	idpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	idpReq.Header.Set("Accept", "application/json")
+	idpReq.Header.Set("Authorization", auth) // forward client_id:client_secret
+
+	idpResp, err := idpHTTPClient.Do(idpReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "bad_gateway", Message: "could not reach IDP token endpoint"})
+		return
+	}
+	defer idpResp.Body.Close()
+
+	body, err := io.ReadAll(idpResp.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "bad_gateway", Message: "could not read IDP response"})
+		return
+	}
+
+	contentType := idpResp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(idpResp.StatusCode)
+	_, _ = w.Write(body)
+}
+
 func presentmentHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -208,8 +292,8 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "Content-Type must be application/json"})
 			return
 		}
-		if !checkBearerAuth(r) {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "missing bearer token"})
+		if err := authorizeBearer(cfg, r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: err.Error()})
 			return
 		}
 		if r.Header.Get("TransactionKey") == "" {
@@ -223,13 +307,19 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
+		refNo, err := validateRefNoOnly(req.Data)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: err.Error()})
+			return
+		}
+
 		resp := PresentmentResponse{
 			TransactionID:   req.TransactionID,
 			SubInstID:       req.SubInstID,
 			ServiceID:       req.ServiceID,
 			ServiceName:     req.ServiceName,
 			Message:         "Success",
-			PresentmentData: buildPresentmentData(req.Data),
+			PresentmentData: buildPresentmentData(refNo),
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -245,8 +335,8 @@ func updateHandler(cfg Config) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "Content-Type must be application/json"})
 			return
 		}
-		if !checkBearerAuth(r) {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "missing bearer token"})
+		if err := authorizeBearer(cfg, r); err != nil {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: err.Error()})
 			return
 		}
 		if r.Header.Get("TransactionKey") == "" {
@@ -327,48 +417,86 @@ func parsePresentmentRequest(r *http.Request) (PresentmentRequest, error) {
 	}, nil
 }
 
-func buildPresentmentData(params []Param) []PresentmentObject {
-	objects := make([]PresentmentObject, 0, len(params))
-	for i, param := range params {
-		seq := strings.TrimSpace(param.Seq)
-		if seq == "" {
-			seq = fmt.Sprintf("%d", i+1)
-		}
-		paramName := strings.TrimSpace(param.ParamName)
-		if paramName == "" {
-			paramName = fmt.Sprintf("param_%d", i+1)
-		}
+// refNoMaxLength is the maximum allowed length of the presentment refNo.
+// Per the GovPay+ spec a data[].value is "an" (alphanumeric) with a hard ceiling
+// of 50; 20 is the value configured for this service at onboarding.
+const refNoMaxLength = 20
 
-		dataType := "text"
-		objType := "label"
-		maxLength := 50
-		if isDecimalValue(param.Value) || strings.Contains(strings.ToLower(paramName), "amount") {
-			dataType = "decimal"
-			objType = "textbox"
-			maxLength = 13
-		}
-
-		objects = append(objects, PresentmentObject{
-			ObjType:       objType,
-			Seq:           seq,
-			ID:            fmt.Sprintf("%03d%04d", i+1, i+1),
-			Placeholder:   paramName,
-			InitialValue:  param.Value,
-			DataType:      dataType,
-			MaxLength:     maxLength,
-			SelectionType: "SINGLE",
-			Mask:          "",
-			NotNull:       "true",
-			Enabled:       boolToFlag(objType == "textbox"),
-			Returned:      "true",
-			Rows:          1,
-			Cols:          1,
-			ReturnParam:   paramName,
-			ReturnValue:   "",
-			ObjData:       []ComboItem{},
-		})
+// validateRefNoOnly enforces that the presentment request carries exactly one
+// data item, named "refNo", whose value is a non-empty alphanumeric string no
+// longer than refNoMaxLength. It returns the trimmed refNo on success.
+func validateRefNoOnly(params []Param) (string, error) {
+	if len(params) != 1 {
+		return "", fmt.Errorf("data must contain exactly one item: refNo")
 	}
-	return objects
+	param := params[0]
+	if strings.TrimSpace(param.ParamName) != "refNo" {
+		return "", fmt.Errorf("data must contain only refNo")
+	}
+	refNo, ok := param.Value.(string)
+	if !ok {
+		return "", fmt.Errorf("refNo must be a string")
+	}
+	refNo = strings.TrimSpace(refNo)
+	if refNo == "" {
+		return "", fmt.Errorf("refNo is required")
+	}
+	if len(refNo) > refNoMaxLength {
+		return "", fmt.Errorf("refNo must not exceed %d characters", refNoMaxLength)
+	}
+	if !isAlphaNumeric(refNo) {
+		return "", fmt.Errorf("refNo must be alphanumeric")
+	}
+	return refNo, nil
+}
+
+func isAlphaNumeric(s string) bool {
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// buildPresentmentData returns the fields to display in the GovPay+ UI for a
+// given refNo. In production these would be looked up from the GO's billing
+// system keyed by refNo; here we return representative sample data, including
+// the amount to pay. The amount is presented (enabled=false) and echoed back to
+// the GO in the update request (returned=true, returnParam="amount").
+func buildPresentmentData(refNo string) []PresentmentObject {
+	return []PresentmentObject{
+		newPresentmentObject(1, "label", "Reference Number", refNo, "text", refNoMaxLength, false, true, "refNo"),
+		newPresentmentObject(2, "label", "Taxpayer Name", "John Doe", "text", 50, false, false, ""),
+		newPresentmentObject(3, "label", "Tax Type", "Income Tax", "text", 50, false, false, ""),
+		newPresentmentObject(4, "label", "Billing Period", "2026-Q1", "text", 50, false, false, ""),
+		newPresentmentObject(5, "textbox", "Amount To Be Paid (LKR)", 1500.50, "decimal", 13, false, true, "amount"),
+	}
+}
+
+// newPresentmentObject builds a single presentment object with the common
+// defaults from the GovPay+ spec (§2.4.3.2), varying only the fields a caller
+// cares about.
+func newPresentmentObject(seq int, objType, placeholder string, initialValue interface{}, dataType string, maxLength int, enabled, returned bool, returnParam string) PresentmentObject {
+	return PresentmentObject{
+		ObjType:       objType,
+		Seq:           strconv.Itoa(seq),
+		ID:            fmt.Sprintf("%03d%04d", seq, seq),
+		Placeholder:   placeholder,
+		InitialValue:  initialValue,
+		DataType:      dataType,
+		MaxLength:     maxLength,
+		SelectionType: "SINGLE",
+		Mask:          "",
+		NotNull:       "true",
+		Enabled:       boolToFlag(enabled),
+		Returned:      boolToFlag(returned),
+		Rows:          1,
+		Cols:          1,
+		ReturnParam:   returnParam,
+		ReturnValue:   "",
+		ObjData:       []ComboItem{},
+	}
 }
 
 func isDecimalValue(value interface{}) bool {
@@ -501,9 +629,25 @@ func checkBasicAuth(r *http.Request, user, pass string) bool {
 	return parts[0] == user && parts[1] == pass
 }
 
-func checkBearerAuth(r *http.Request) bool {
+// authorizeBearer extracts the bearer token and, when an IDP verifier is
+// configured, validates it against the IDP's JWKS. Without a verifier it only
+// requires a non-empty bearer token (local development).
+func authorizeBearer(cfg Config, r *http.Request) error {
 	const prefix = "Bearer "
-	return strings.HasPrefix(r.Header.Get("Authorization"), prefix)
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, prefix) {
+		return fmt.Errorf("missing bearer token")
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
+	if token == "" {
+		return fmt.Errorf("missing bearer token")
+	}
+	if cfg.Verifier != nil {
+		if err := cfg.Verifier.verify(token); err != nil {
+			return fmt.Errorf("invalid token: %v", err)
+		}
+	}
+	return nil
 }
 
 func newToken() string {
