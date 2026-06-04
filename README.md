@@ -94,9 +94,9 @@ curl -k -X POST "${BASE_URL}/api/govpayplus/v1.0/presentment" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "TransactionKey: demo-transaction-key" \
   -d '{
-    "transactionId": "60562345678995555",
+    "transactionID": "60562345678995555",
     "subinstId": "001",
-    "serviceId": "001",
+    "serviceid": "001",
     "serviceName": "Tax Payment",
     "data": [
       {"seq": "1", "paramName": "refNo", "value": "ABC123456"}
@@ -112,9 +112,9 @@ curl -k -X POST "${BASE_URL}/api/govpayplus/v1.0/update" \
   -H "Authorization: Bearer ${ACCESS_TOKEN}" \
   -H "TransactionKey: demo-transaction-key" \
   -d '{
-    "transactionId": "60562345678995555",
+    "transactionID": "60562345678995555",
     "subinstId": "001",
-    "serviceId": "001",
+    "serviceid": "001",
     "serviceName": "Tax Payment",
     "data": [
       {"seq": "1", "paramName": "tin", "value": "123456"},

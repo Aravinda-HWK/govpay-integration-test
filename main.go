@@ -57,9 +57,9 @@ type PresentmentRequest struct {
 }
 
 type PresentmentResponse struct {
-	TransactionID   string              `json:"transactionId"`
+	TransactionID   string              `json:"transactionID"`
 	SubInstID       string              `json:"subinstId"`
-	ServiceID       string              `json:"serviceId"`
+	ServiceID       string              `json:"serviceid"`
 	ServiceName     string              `json:"serviceName"`
 	Message         string              `json:"message"`
 	PresentmentData []PresentmentObject `json:"presentmentData"`
@@ -111,9 +111,9 @@ type TableRow struct {
 }
 
 type UpdateResponse struct {
-	TransactionID string        `json:"transactionId"`
+	TransactionID string        `json:"transactionID"`
 	SubInstID     string        `json:"subinstId"`
-	ServiceID     string        `json:"serviceId"`
+	ServiceID     string        `json:"serviceid"`
 	ServiceName   string        `json:"serviceName"`
 	Message       string        `json:"message"`
 	PaymentData   []PaymentItem `json:"paymentData"`
@@ -371,12 +371,12 @@ func parsePresentmentRequest(r *http.Request) (PresentmentRequest, error) {
 		return PresentmentRequest{}, fmt.Errorf("invalid json")
 	}
 
-	transactionID, ok, err := getStringField(payload, "transactionId")
+	transactionID, ok, err := getStringField(payload, "transactionID", "transactionId")
 	if err != nil {
 		return PresentmentRequest{}, err
 	}
 	if !ok {
-		return PresentmentRequest{}, fmt.Errorf("transactionId required")
+		return PresentmentRequest{}, fmt.Errorf("transactionID required")
 	}
 
 	subInstID, ok, err := getStringField(payload, "subinstId", "suinstId")
@@ -387,12 +387,12 @@ func parsePresentmentRequest(r *http.Request) (PresentmentRequest, error) {
 		return PresentmentRequest{}, fmt.Errorf("subinstId required")
 	}
 
-	serviceID, ok, err := getStringField(payload, "serviceId", "serviced")
+	serviceID, ok, err := getStringField(payload, "serviceid", "serviceId", "serviced")
 	if err != nil {
 		return PresentmentRequest{}, err
 	}
 	if !ok {
-		return PresentmentRequest{}, fmt.Errorf("serviceId required")
+		return PresentmentRequest{}, fmt.Errorf("serviceid required")
 	}
 
 	serviceName, ok, err := getStringField(payload, "serviceName")
