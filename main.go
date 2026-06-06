@@ -28,6 +28,9 @@ type Config struct {
 	// Verifier, when non-nil, validates the bearer token on /presentment and
 	// /update against the IDP's JWKS.
 	Verifier *idpVerifier
+
+	// Bills is the registry of valid reference numbers and their payment state.
+	Bills *BillStore
 }
 
 type ErrorResponse struct {
@@ -166,6 +169,7 @@ func loadConfig() Config {
 		BasicPass:       getEnv("GOVPAY_BASIC_PASS", "govpay"),
 		TokenTTLSeconds: getEnvInt("GOVPAY_TOKEN_TTL_SECONDS", 3600),
 		IDPTokenURL:     getEnv("GOVPAY_IDP_TOKEN_URL", ""),
+		Bills:           NewBillStore(),
 	}
 
 	if jwksURL := getEnv("GOVPAY_IDP_JWKS_URL", ""); jwksURL != "" {
@@ -315,13 +319,23 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
+		bill, ok := cfg.Bills.Lookup(refNo)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "invalid_reference", Message: "invalid reference number"})
+			return
+		}
+		if cfg.Bills.IsPaid(refNo) {
+			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "already_paid", Message: "payment already completed for this reference number"})
+			return
+		}
+
 		resp := PresentmentResponse{
 			TransactionID:   req.TransactionID,
 			SubInstID:       req.SubInstID,
 			ServiceID:       req.ServiceID,
 			ServiceName:     req.ServiceName,
 			Message:         "Success",
-			PresentmentData: buildPresentmentData(refNo),
+			PresentmentData: buildPresentmentData(bill),
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -349,6 +363,22 @@ func updateHandler(cfg Config) http.HandlerFunc {
 		req, err := parsePresentmentRequest(r)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: err.Error()})
+			return
+		}
+
+		refNo := findRefNo(req.Data)
+		if refNo == "" {
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "refNo is required"})
+			return
+		}
+		if _, ok := cfg.Bills.Lookup(refNo); !ok {
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "invalid_reference", Message: "invalid reference number"})
+			return
+		}
+		// MarkPaid is atomic and returns false if the bill was already paid,
+		// which prevents a second (double) payment for the same refNo.
+		if !cfg.Bills.MarkPaid(refNo) {
+			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "already_paid", Message: "payment already completed for this reference number"})
 			return
 		}
 
@@ -452,6 +482,21 @@ func validateRefNoOnly(params []Param) (string, error) {
 	return refNo, nil
 }
 
+// findRefNo returns the trimmed value of the data item named "refNo" (echoed
+// back by GovPay+ from the presentment response), or "" if it is absent or not
+// a string.
+func findRefNo(params []Param) string {
+	for _, param := range params {
+		if strings.TrimSpace(param.ParamName) != "refNo" {
+			continue
+		}
+		if v, ok := param.Value.(string); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 func isAlphaNumeric(s string) bool {
 	for _, r := range s {
 		if (r < '0' || r > '9') && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') {
@@ -462,17 +507,15 @@ func isAlphaNumeric(s string) bool {
 }
 
 // buildPresentmentData returns the fields to display in the GovPay+ UI for a
-// given refNo. In production these would be looked up from the GO's billing
-// system keyed by refNo; here we return representative sample data, including
-// the amount to pay. The amount is presented (enabled=false) and echoed back to
-// the GO in the update request (returned=true, returnParam="amount").
-func buildPresentmentData(refNo string) []PresentmentObject {
+// given bill. The amount is presented (enabled=false) and echoed back to the GO
+// in the update request (returned=true, returnedParam="amount").
+func buildPresentmentData(bill *BillRecord) []PresentmentObject {
 	return []PresentmentObject{
-		newPresentmentObject(1, "label", "Reference Number", refNo, "text", refNoMaxLength, false, true, "refNo", true, false),
-		newPresentmentObject(2, "label", "Taxpayer Name", "John Doe", "text", 50, false, false, "", false, false),
-		newPresentmentObject(3, "label", "Tax Type", "Income Tax", "text", 50, false, false, "", false, false),
-		newPresentmentObject(4, "label", "Billing Period", "2026-Q1", "text", 50, false, false, "", false, false),
-		newPresentmentObject(5, "textBox", "Amount To Be Paid (LKR)", 1500.50, "decimal", 13, false, true, "amount", false, true),
+		newPresentmentObject(1, "label", "Reference Number", bill.RefNo, "text", refNoMaxLength, false, true, "refNo", true, false),
+		newPresentmentObject(2, "label", "Taxpayer Name", bill.TaxpayerName, "text", 50, false, false, "", false, false),
+		newPresentmentObject(3, "label", "Tax Type", bill.TaxType, "text", 50, false, false, "", false, false),
+		newPresentmentObject(4, "label", "Billing Period", bill.BillingPeriod, "text", 50, false, false, "", false, false),
+		newPresentmentObject(5, "textBox", "Amount To Be Paid (LKR)", bill.Amount, "decimal", 13, false, true, "amount", false, true),
 	}
 }
 
