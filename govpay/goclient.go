@@ -125,7 +125,7 @@ func (c *GOClient) Token(ctx context.Context, ep GoEndpoint) (string, error) {
 	form.Set("grant_type", "client_credentials")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		joinURL(ep.BaseURL, ep.Auth.TokenPath), strings.NewReader(form.Encode()))
+		tokenEndpoint(ep), strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}
@@ -236,4 +236,14 @@ func extractMessage(body []byte, fallback string) string {
 
 func joinURL(base, path string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
+}
+
+// tokenEndpoint resolves the auth token URL: the configured full TokenURL when
+// set (it may be on a different host than the GO base URL), otherwise
+// baseURL + TokenPath.
+func tokenEndpoint(ep GoEndpoint) string {
+	if u := strings.TrimSpace(ep.Auth.TokenURL); u != "" {
+		return u
+	}
+	return joinURL(ep.BaseURL, ep.Auth.TokenPath)
 }

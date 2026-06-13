@@ -1,60 +1,42 @@
-# GovPay+ mock server configuration.
-#
-# This file seeds the GovPay+ side: the Government Organization (GO) endpoint it
-# calls, the sub-institutions and their services (each mapped to one collection
-# account), and the mock payer bank accounts.
-#
-# The "goEndpoint" section is editable at runtime from the GovPay+ UI (Settings)
-# and changes are written back to this file.
-
 server:
-  addr: ":9091"
-
-# The Government Organization (GO) endpoint that GovPay+ calls.
+    addr: :9091
 goEndpoint:
-  baseURL: "https://nsw-api-nsw-staging.apps.sovecloud1.akaza.lk"
-  presentmentPath: "/api/v1/payments/govpay/validate"
-  updatePath: "/api/v1/payments/govpay/webhook"
-  # 32-digit transaction key sent in the TransactionKey header (see spec §3).
-  transactionKey: "12345678901234567890123456789012"
-  # When auth is enabled, GovPay+ first obtains a bearer token from the GO's
-  # generatetoken endpoint using HTTP Basic credentials, then calls
-  # presentment/update with that token. When disabled, presentment/update are
-  # called with no Authorization header.
-  auth:
-    enabled: false
-    tokenPath: "/api/govpayplus/v1.0/generatetoken"
-    clientId: "govpay"
-    clientSecret: "govpay"
-
-# Sub-institutions assigned by GovPay (subInstId), each offering one or more
-# services (serviceId). Every service collects into exactly one account; the
-# payer selects the sub-institution and the service, and the destination account
-# is fixed by that choice (not selectable).
+    baseURL: https://nsw-api-nsw-staging.apps.sovecloud1.akaza.lk
+    presentmentPath: /api/v1/payments/govpay/validate
+    updatePath: /api/v1/payments/govpay/webhook
+    transactionKey: "12345678901234567890123456789012"
+    auth:
+        enabled: false
+        # Full token endpoint URL (can be a different host than baseURL). If
+        # empty, falls back to baseURL + tokenPath.
+        tokenURL: https://apis.leco.lk/oauth2/token
+        tokenPath: /api/govpayplus/v1.0/generatetoken
+        clientId: govpay
+        clientSecret: govpay
 subInstitutions:
-  - id: "001"
-    name: "FCAU"
-    services:
-      - id: "001"
-        name: "Application Fee"
-        account:
-          number: "1000200030004000"
-          name: "FCAU Application Fee Collection"
-      - id: "002"
-        name: "Renewal Fee"
-        account:
-          number: "1000200030004001"
-          name: "FCAU Renewal Collection"
-  - id: "002"
-    name: "NPQS"
-    services:
-      - id: "001"
-        name: "Certification Fee"
-        account:
-          number: "2000300040005000"
-          name: "NPQS Certification Collection"
-      - id: "002"
-        name: "Inspection Fee"
-        account:
-          number: "2000300040005001"
-          name: "NPQS Inspection Collection"
+    - id: "001"
+      name: FCAU
+      services:
+        - id: "001"
+          name: Application Fee
+          account:
+            number: "1000200030004000"
+            name: FCAU Application Fee Collection
+        - id: "002"
+          name: Renewal Fee
+          account:
+            number: "1000200030004001"
+            name: FCAU Renewal Collection
+    - id: "002"
+      name: NPQS
+      services:
+        - id: "001"
+          name: Certification Fee
+          account:
+            number: "2000300040005000"
+            name: NPQS Certification Collection
+        - id: "002"
+          name: Inspection Fee
+          account:
+            number: "2000300040005001"
+            name: NPQS Inspection Collection

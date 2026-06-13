@@ -65,8 +65,12 @@ export function Settings() {
         {ep.auth.enabled ? (
           <>
             <div className="field">
-              <label>Token path</label>
-              <input value={ep.auth.tokenPath} onChange={(e) => setAuth({ tokenPath: e.target.value })} />
+              <label>Token URL (full; may be a different host than the base URL)</label>
+              <input
+                placeholder="https://idp.example.com/oauth2/token"
+                value={ep.auth.tokenURL}
+                onChange={(e) => setAuth({ tokenURL: e.target.value })}
+              />
             </div>
             <div className="field">
               <label>Client ID</label>

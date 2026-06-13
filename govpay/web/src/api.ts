@@ -90,6 +90,7 @@ export interface ServicesView {
 
 export interface AuthConfig {
   enabled: boolean
+  tokenURL: string
   tokenPath: string
   clientId: string
   clientSecret: string

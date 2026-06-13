@@ -30,7 +30,11 @@ type GoEndpoint struct {
 }
 
 type AuthConfig struct {
-	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// TokenURL is the full token endpoint URL. It can live on a different host
+	// than the GO base URL (e.g. a separate IdP). If left empty it falls back to
+	// baseURL + TokenPath.
+	TokenURL     string `yaml:"tokenURL" json:"tokenURL"`
 	TokenPath    string `yaml:"tokenPath" json:"tokenPath"`
 	ClientID     string `yaml:"clientId" json:"clientId"`
 	ClientSecret string `yaml:"clientSecret" json:"clientSecret"`
