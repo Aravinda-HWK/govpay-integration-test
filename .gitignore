@@ -1,0 +1,6 @@
+# Go build artifacts
+client/client
+client/govpay-go-client
+govpay/govpay
+govpay/govpay-server
+*.test
