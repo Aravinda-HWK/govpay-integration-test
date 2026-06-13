@@ -1,0 +1,48 @@
+image:
+  # Defaults to the OpenShift internal registry image built in this project.
+  repository: image-registry.openshift-image-registry.svc:5000/nsw-infra-staging/govpay-mock
+  tag: "latest"
+  # Always re-pull because the "latest" tag is mutable.
+  pullPolicy: Always
+
+service:
+  port: 9091
+
+# Government Organization (GO) endpoint that GovPay+ calls.
+#
+# URLs and credentials are deployment-specific and are intentionally left blank
+# here — supply them at deploy time, e.g.:
+#   helm upgrade --install govpay-mock ./helm/govpay-mock -n nsw-infra-staging \
+#     --set goEndpoint.baseURL=https://<go-host> \
+#     --set goEndpoint.transactionKey=<32-char-key>
+#
+# When auth.enabled is true, also set goEndpoint.auth.tokenURL / clientId /
+# clientSecret (consider --set or a separate, untracked values file / secret).
+goEndpoint:
+  baseURL: ""
+  presentmentPath: "/api/v1/payments/govpay/validate"
+  updatePath: "/api/v1/payments/govpay/webhook"
+  transactionKey: ""
+  auth:
+    enabled: false
+    tokenURL: ""
+    tokenPath: "/api/govpayplus/v1.0/generatetoken"
+    clientId: ""
+    clientSecret: ""
+
+route:
+  enabled: true
+  host: ""
+  tls:
+    # Edge termination at the OpenShift router using the cluster's default
+    # ingress certificate; pod traffic stays HTTP on service.port.
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"

@@ -1,0 +1,8 @@
+# Node deps and build output are rebuilt inside the image.
+web/node_modules
+web/dist
+# Local Go build artifacts
+govpay-server
+govpay
+*.test
+.git

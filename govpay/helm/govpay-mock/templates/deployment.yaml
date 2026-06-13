@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: govpay-mock
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          env:
+            - name: GOVPAY_ADDR
+              value: ":{{ .Values.service.port }}"
+            # GO endpoint — supplied at deploy time; blank values fall back to
+            # the baked config.yaml.
+            {{- with .Values.goEndpoint.baseURL }}
+            - name: GOVPAY_GO_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.goEndpoint.presentmentPath }}
+            - name: GOVPAY_GO_PRESENTMENT_PATH
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.goEndpoint.updatePath }}
+            - name: GOVPAY_GO_UPDATE_PATH
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.goEndpoint.transactionKey }}
+            - name: GOVPAY_GO_TRANSACTION_KEY
+              value: {{ . | quote }}
+            {{- end }}
+            - name: GOVPAY_AUTH_ENABLED
+              value: {{ .Values.goEndpoint.auth.enabled | quote }}
+            {{- with .Values.goEndpoint.auth.tokenURL }}
+            - name: GOVPAY_AUTH_TOKEN_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.goEndpoint.auth.tokenPath }}
+            - name: GOVPAY_AUTH_TOKEN_PATH
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.goEndpoint.auth.clientId }}
+            - name: GOVPAY_AUTH_CLIENT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.goEndpoint.auth.clientSecret }}
+            - name: GOVPAY_AUTH_CLIENT_SECRET
+              value: {{ . | quote }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+          readinessProbe:
+            httpGet:
+              path: /api/services
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 10

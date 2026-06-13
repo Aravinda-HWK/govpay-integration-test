@@ -1,42 +1,59 @@
+# GovPay+ mock server configuration.
+#
+# The GO endpoint URLs and credentials below are intentionally left blank — they
+# are environment/deployment specific and are supplied at runtime via:
+#   - environment variables (GOVPAY_GO_BASE_URL, GOVPAY_GO_TRANSACTION_KEY,
+#     GOVPAY_AUTH_ENABLED, GOVPAY_AUTH_TOKEN_URL, GOVPAY_AUTH_CLIENT_ID,
+#     GOVPAY_AUTH_CLIENT_SECRET, ...) — set by the Helm chart at deploy time, or
+#   - the Settings tab in the UI (persisted back here when the filesystem is writable).
+#
+# For local development, either fill in baseURL/transactionKey below or export
+# the env vars before running.
+
 server:
-    addr: :9091
+  addr: ":9091"
+
 goEndpoint:
-    baseURL: https://nsw-api-nsw-staging.apps.sovecloud1.akaza.lk
-    presentmentPath: /api/v1/payments/govpay/validate
-    updatePath: /api/v1/payments/govpay/webhook
-    transactionKey: "12345678901234567890123456789012"
-    auth:
-        enabled: false
-        # Full token endpoint URL (can be a different host than baseURL). If
-        # empty, falls back to baseURL + tokenPath.
-        tokenURL: https://apis.leco.lk/oauth2/token
-        tokenPath: /api/govpayplus/v1.0/generatetoken
-        clientId: govpay
-        clientSecret: govpay
+  baseURL: ""
+  presentmentPath: "/api/v1/payments/govpay/validate"
+  updatePath: "/api/v1/payments/govpay/webhook"
+  # 32-character transaction key sent in the TransactionKey header (see spec §3).
+  transactionKey: ""
+  auth:
+    enabled: false
+    # Full token endpoint URL (can be a different host than baseURL). If empty,
+    # falls back to baseURL + tokenPath.
+    tokenURL: ""
+    tokenPath: "/api/govpayplus/v1.0/generatetoken"
+    clientId: ""
+    clientSecret: ""
+
+# Sub-institutions and their services (each mapped to one collection account).
+# These form the service catalog shown in the UI.
 subInstitutions:
-    - id: "001"
-      name: FCAU
-      services:
-        - id: "001"
-          name: Application Fee
-          account:
-            number: "1000200030004000"
-            name: FCAU Application Fee Collection
-        - id: "002"
-          name: Renewal Fee
-          account:
-            number: "1000200030004001"
-            name: FCAU Renewal Collection
-    - id: "002"
-      name: NPQS
-      services:
-        - id: "001"
-          name: Certification Fee
-          account:
-            number: "2000300040005000"
-            name: NPQS Certification Collection
-        - id: "002"
-          name: Inspection Fee
-          account:
-            number: "2000300040005001"
-            name: NPQS Inspection Collection
+  - id: "001"
+    name: "FCAU"
+    services:
+      - id: "001"
+        name: "Application Fee"
+        account:
+          number: "1000200030004000"
+          name: "FCAU Application Fee Collection"
+      - id: "002"
+        name: "Renewal Fee"
+        account:
+          number: "1000200030004001"
+          name: "FCAU Renewal Collection"
+  - id: "002"
+    name: "NPQS"
+    services:
+      - id: "001"
+        name: "Certification Fee"
+        account:
+          number: "2000300040005000"
+          name: "NPQS Certification Collection"
+      - id: "002"
+        name: "Inspection Fee"
+        account:
+          number: "2000300040005001"
+          name: "NPQS Inspection Collection"

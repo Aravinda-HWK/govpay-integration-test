@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -87,7 +90,33 @@ func LoadStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	cfg.applyDefaults()
+	cfg.applyEnvOverrides()
 	return &Store{path: path, cfg: cfg}, nil
+}
+
+// applyEnvOverrides lets the GO endpoint be configured at deploy time via
+// environment variables (so URLs/secrets are not baked into config.yaml or the
+// Helm values file). Only non-empty variables override the file.
+func (c *Config) applyEnvOverrides() {
+	setStr := func(env string, dst *string) {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			*dst = v
+		}
+	}
+	setStr("GOVPAY_ADDR", &c.Server.Addr)
+	setStr("GOVPAY_GO_BASE_URL", &c.GoEndpoint.BaseURL)
+	setStr("GOVPAY_GO_PRESENTMENT_PATH", &c.GoEndpoint.PresentmentPath)
+	setStr("GOVPAY_GO_UPDATE_PATH", &c.GoEndpoint.UpdatePath)
+	setStr("GOVPAY_GO_TRANSACTION_KEY", &c.GoEndpoint.TransactionKey)
+	setStr("GOVPAY_AUTH_TOKEN_URL", &c.GoEndpoint.Auth.TokenURL)
+	setStr("GOVPAY_AUTH_TOKEN_PATH", &c.GoEndpoint.Auth.TokenPath)
+	setStr("GOVPAY_AUTH_CLIENT_ID", &c.GoEndpoint.Auth.ClientID)
+	setStr("GOVPAY_AUTH_CLIENT_SECRET", &c.GoEndpoint.Auth.ClientSecret)
+	if v := strings.TrimSpace(os.Getenv("GOVPAY_AUTH_ENABLED")); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.GoEndpoint.Auth.Enabled = enabled
+		}
+	}
 }
 
 func (c *Config) applyDefaults() {
@@ -132,23 +161,26 @@ func (s *Store) FindService(subInstID, serviceID string) (SubInstitution, Servic
 	return SubInstitution{}, Service{}, false
 }
 
-// UpdateEndpoint replaces the goEndpoint settings and persists the whole config
-// back to disk.
+// UpdateEndpoint replaces the goEndpoint settings (in memory) and persists the
+// whole config back to disk on a best-effort basis. Persistence is best-effort
+// because in a container the config file lives on a read-only image layer; the
+// in-memory change still takes effect for the running process.
 func (s *Store) UpdateEndpoint(ep GoEndpoint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cfg.GoEndpoint = ep
 	s.cfg.applyDefaults()
-	return s.persistLocked()
+	s.persistLocked()
+	return nil
 }
 
-func (s *Store) persistLocked() error {
+func (s *Store) persistLocked() {
 	data, err := yaml.Marshal(&s.cfg)
 	if err != nil {
-		return fmt.Errorf("marshal config: %w", err)
+		log.Printf("warning: could not marshal config for persistence: %v", err)
+		return
 	}
 	if err := os.WriteFile(s.path, data, 0o644); err != nil {
-		return fmt.Errorf("write config: %w", err)
+		log.Printf("warning: could not persist config to %s (changes kept in memory): %v", s.path, err)
 	}
-	return nil
 }
