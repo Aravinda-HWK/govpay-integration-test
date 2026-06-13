@@ -1,6 +1,5 @@
 image:
-  # Defaults to the OpenShift internal registry image built in this project.
-  repository: image-registry.openshift-image-registry.svc:5000/nsw-infra-staging/govpay-mock
+  repository: ghcr.io/aravinda-hwk/govpay-mock
   tag: "latest"
   # Always re-pull because the "latest" tag is mutable.
   pullPolicy: Always
