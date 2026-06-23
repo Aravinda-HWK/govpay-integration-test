@@ -100,7 +100,6 @@ export interface GoEndpoint {
   baseURL: string
   presentmentPath: string
   updatePath: string
-  transactionKey: string
   auth: AuthConfig
 }
 

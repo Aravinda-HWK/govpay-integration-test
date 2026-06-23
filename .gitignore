@@ -4,3 +4,11 @@ client/govpay-go-client
 server/govpay
 server/govpay-server
 *.test
+
+# RSA private keys — secret, never commit. Generate per environment and inject
+# via a Secret (OpenShift) or GOVPAY_RSA_PRIVATE_KEY(_FILE). See client/README.md.
+*_private.pem
+client/keys/
+
+*_public.pem
+server/ekys/

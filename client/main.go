@@ -29,6 +29,11 @@ type Config struct {
 	// /update against the IDP's JWKS.
 	Verifier *idpVerifier
 
+	// Decryptor holds the GO's RSA private key and performs the data-encryption
+	// scheme of spec §3 (decrypt the transaction key + request values, encrypt
+	// response values). It is always required.
+	Decryptor *Decryptor
+
 	// Bills is the registry of valid reference numbers and their payment state.
 	Bills *BillStore
 }
@@ -172,6 +177,28 @@ func loadConfig() Config {
 		Bills:           NewBillStore(),
 	}
 
+	// Data encryption (spec §3) is always on: the GO requires its RSA private
+	// key to decrypt the transaction key and request values. An inline PEM
+	// (GOVPAY_RSA_PRIVATE_KEY) takes precedence over the key file.
+	var (
+		decryptor *Decryptor
+		err       error
+		keySource string
+	)
+	if pemStr := getEnv("GOVPAY_RSA_PRIVATE_KEY", ""); pemStr != "" {
+		decryptor, err = newDecryptor([]byte(pemStr))
+		keySource = "GOVPAY_RSA_PRIVATE_KEY (inline)"
+	} else {
+		keyPath := getEnv("GOVPAY_RSA_PRIVATE_KEY_FILE", "keys/go_private.pem")
+		decryptor, err = loadDecryptor(keyPath)
+		keySource = keyPath
+	}
+	if err != nil {
+		log.Fatalf("load RSA private key (%s): %v", keySource, err)
+	}
+	cfg.Decryptor = decryptor
+	log.Printf("data encryption enabled (RSA private key=%s)", keySource)
+
 	if jwksURL := getEnv("GOVPAY_IDP_JWKS_URL", ""); jwksURL != "" {
 		cfg.Verifier = newIDPVerifier(
 			jwksURL,
@@ -307,9 +334,22 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
+		// Decrypt the transaction key (RSA) then the request values (AES-GCM).
+		// Per spec §3.1.6 a decryption/verification failure is 401, not 400.
+		aesKey, err := cfg.Decryptor.DecryptTransactionKey(r.Header.Get("TransactionKey"))
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "invalid TransactionKey"})
+			return
+		}
+
 		req, err := parsePresentmentRequest(r)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: err.Error()})
+			return
+		}
+
+		if err := cfg.Decryptor.DecryptValues(req.Data, aesKey); err != nil {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "could not decrypt request values"})
 			return
 		}
 
@@ -337,6 +377,11 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			Message:         "Success",
 			PresentmentData: buildPresentmentData(bill),
 		}
+		// Encrypt the response values with the same AES key (spec §3.1.7).
+		if err := encryptPresentmentValues(resp.PresentmentData, aesKey); err != nil {
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "server_error", Message: "could not encrypt response"})
+			return
+		}
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
@@ -360,9 +405,20 @@ func updateHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
+		aesKey, err := cfg.Decryptor.DecryptTransactionKey(r.Header.Get("TransactionKey"))
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "invalid TransactionKey"})
+			return
+		}
+
 		req, err := parsePresentmentRequest(r)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: err.Error()})
+			return
+		}
+
+		if err := cfg.Decryptor.DecryptValues(req.Data, aesKey); err != nil {
+			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "could not decrypt request values"})
 			return
 		}
 
@@ -389,6 +445,11 @@ func updateHandler(cfg Config) http.HandlerFunc {
 			ServiceName:   req.ServiceName,
 			Message:       "Success",
 			PaymentData:   buildPaymentData(req.Data, req.TransactionID),
+		}
+		// Encrypt the response values with the same AES key (spec §3.1.7).
+		if err := encryptPaymentValues(resp.PaymentData, aesKey); err != nil {
+			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "server_error", Message: "could not encrypt response"})
+			return
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}

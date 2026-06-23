@@ -13,9 +13,10 @@ It lets you:
 - Pick a **source bank account** and run a **mock bank transfer** into that service's
   collection account, then call the GO's **update** endpoint to confirm the payment and show
   the receipt.
-- Configure the **GO endpoint** — base URL, presentment/update paths, transaction key, and
-  whether to call **with auth** (bearer token via the token endpoint) or **without auth** —
-  from the **Settings** tab. Changes are persisted back to `config.yaml`.
+- Configure the **GO endpoint** — base URL, presentment/update paths, and whether to call
+  **with auth** (bearer token via the token endpoint) or **without auth** — from the
+  **Settings** tab. Changes are persisted back to `config.yaml`. (The transaction key is no
+  longer configured here: it is generated per call and RSA-encrypted — see *Data encryption*.)
 
 Sub-institutions, services, and their collection accounts are configured in `config.yaml`.
 
@@ -37,12 +38,16 @@ goEndpoint:
   baseURL: "http://localhost:8080"
   presentmentPath: "/api/v1/payments/govpay/validate"
   updatePath: "/api/v1/payments/govpay/webhook"
-  transactionKey: "12345678901234567890123456789012"
   auth:
     enabled: false            # true → obtain a bearer token before each call
     tokenPath: "/api/govpayplus/v1.0/generatetoken"
     clientId: "govpay"
     clientSecret: "govpay"
+
+# Data encryption (spec §3): the GO's RSA public key used to encrypt the
+# per-transaction AES key. Inline PEM via publicKey, or a path via publicKeyFile.
+encryption:
+  publicKeyFile: "keys/go_public.pem"
 
 # Sub-institutions, each with services. Every service collects into one account
 # (fixed; the payer cannot choose it).
@@ -74,6 +79,25 @@ bank:
 The `goEndpoint` section is editable at runtime from the **Settings** tab. Sub-institutions,
 services, and their collection accounts are edited directly in this file. Payer account
 balances update in memory after each transfer and are persisted back here.
+
+## Data encryption (spec §3)
+
+Every presentment/update call to the GO is encrypted, per the spec's "Security
+Standards for Data Encryption". **This is always on** — GovPay+ needs the GO's
+RSA public key to start.
+
+For each call GovPay+:
+
+1. generates a fresh 32-character AES-256 transaction key;
+2. RSA-OAEP(SHA-256) encrypts it with the GO public key → the `TransactionKey`
+   header (the plaintext key is no longer sent);
+3. AES-256-GCM encrypts each `data[].value` (IV = first 12 bytes of the AES key);
+4. decrypts the response `initialValue`s with the same AES key.
+
+Point GovPay+ at the GO's public key via config (`encryption.publicKeyFile` /
+`encryption.publicKey`) or env (`GOVPAY_GO_PUBLIC_KEY_FILE` / `GOVPAY_GO_PUBLIC_KEY`).
+The key in `keys/go_public.pem` is the **test** counterpart to the GO's private
+key in `../client/keys/go_private.pem`; replace both for any real deployment.
 
 ## Build & run (single binary)
 

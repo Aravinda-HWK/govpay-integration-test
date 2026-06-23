@@ -40,10 +40,10 @@ type txnSession struct {
 	CreatedAt   time.Time
 }
 
-func NewServer(store *Store) *Server {
+func NewServer(store *Store, enc *Encryptor) *Server {
 	return &Server{
 		store:    store,
-		go_:      NewGOClient(),
+		go_:      NewGOClient(enc),
 		sessions: make(map[string]*txnSession),
 	}
 }

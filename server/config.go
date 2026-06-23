@@ -15,7 +15,17 @@ import (
 type Config struct {
 	Server          ServerConfig     `yaml:"server"`
 	GoEndpoint      GoEndpoint       `yaml:"goEndpoint"`
+	Encryption      EncryptionConfig `yaml:"encryption"`
 	SubInstitutions []SubInstitution `yaml:"subInstitutions"`
+}
+
+// EncryptionConfig points at the GO's RSA public key used to encrypt the
+// per-transaction AES key (spec §3). It lives outside goEndpoint so it is not
+// exposed/overwritten through the UI's /api/config endpoint. An inline PEM in
+// PublicKey takes precedence over PublicKeyFile.
+type EncryptionConfig struct {
+	PublicKeyFile string `yaml:"publicKeyFile"`
+	PublicKey     string `yaml:"publicKey"`
 }
 
 type ServerConfig struct {
@@ -28,7 +38,6 @@ type GoEndpoint struct {
 	BaseURL         string     `yaml:"baseURL" json:"baseURL"`
 	PresentmentPath string     `yaml:"presentmentPath" json:"presentmentPath"`
 	UpdatePath      string     `yaml:"updatePath" json:"updatePath"`
-	TransactionKey  string     `yaml:"transactionKey" json:"transactionKey"`
 	Auth            AuthConfig `yaml:"auth" json:"auth"`
 }
 
@@ -107,11 +116,12 @@ func (c *Config) applyEnvOverrides() {
 	setStr("GOVPAY_GO_BASE_URL", &c.GoEndpoint.BaseURL)
 	setStr("GOVPAY_GO_PRESENTMENT_PATH", &c.GoEndpoint.PresentmentPath)
 	setStr("GOVPAY_GO_UPDATE_PATH", &c.GoEndpoint.UpdatePath)
-	setStr("GOVPAY_GO_TRANSACTION_KEY", &c.GoEndpoint.TransactionKey)
 	setStr("GOVPAY_AUTH_TOKEN_URL", &c.GoEndpoint.Auth.TokenURL)
 	setStr("GOVPAY_AUTH_TOKEN_PATH", &c.GoEndpoint.Auth.TokenPath)
 	setStr("GOVPAY_AUTH_CLIENT_ID", &c.GoEndpoint.Auth.ClientID)
 	setStr("GOVPAY_AUTH_CLIENT_SECRET", &c.GoEndpoint.Auth.ClientSecret)
+	setStr("GOVPAY_GO_PUBLIC_KEY_FILE", &c.Encryption.PublicKeyFile)
+	setStr("GOVPAY_GO_PUBLIC_KEY", &c.Encryption.PublicKey)
 	if v := strings.TrimSpace(os.Getenv("GOVPAY_AUTH_ENABLED")); v != "" {
 		if enabled, err := strconv.ParseBool(v); err == nil {
 			c.GoEndpoint.Auth.Enabled = enabled
@@ -132,6 +142,23 @@ func (c *Config) applyDefaults() {
 	if c.GoEndpoint.Auth.TokenPath == "" {
 		c.GoEndpoint.Auth.TokenPath = "/api/govpayplus/v1.0/generatetoken"
 	}
+	if c.Encryption.PublicKeyFile == "" && c.Encryption.PublicKey == "" {
+		c.Encryption.PublicKeyFile = "keys/go_public.pem"
+	}
+}
+
+// LoadEncryptor builds the Encryptor from the configured GO public key (inline
+// PEM first, then file). Data encryption is always on, so a missing/invalid key
+// is a fatal configuration error for the caller.
+func (c *Config) LoadEncryptor() (*Encryptor, error) {
+	if pem := strings.TrimSpace(c.Encryption.PublicKey); pem != "" {
+		return NewEncryptor([]byte(pem))
+	}
+	data, err := os.ReadFile(c.Encryption.PublicKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("read GO public key (%s): %w", c.Encryption.PublicKeyFile, err)
+	}
+	return NewEncryptor(data)
 }
 
 // Snapshot returns a copy of the current config for safe concurrent reads.

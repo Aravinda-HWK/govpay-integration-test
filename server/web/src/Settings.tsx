@@ -46,10 +46,6 @@ export function Settings() {
           <label>Update path</label>
           <input value={ep.updatePath} onChange={(e) => set({ updatePath: e.target.value })} />
         </div>
-        <div className="field">
-          <label>Transaction key (32 chars)</label>
-          <input value={ep.transactionKey} onChange={(e) => set({ transactionKey: e.target.value })} />
-        </div>
       </section>
 
       <section className="card">

@@ -43,6 +43,13 @@ spec:
             - name: GOVPAY_IDP_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
+            {{- if or .Values.encryption.existingSecret .Values.encryption.privateKey }}
+            - name: GOVPAY_RSA_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.encryption.existingSecret | default (printf "%s-rsa" .Release.Name) }}
+                  key: {{ .Values.encryption.secretKey | default "privateKey" }}
+            {{- end }}
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu | quote }}

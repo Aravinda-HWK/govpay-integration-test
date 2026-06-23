@@ -25,7 +25,14 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 	cfg := store.Snapshot()
-	srv := NewServer(store)
+
+	// Data encryption (spec §3) is always on: GovPay+ requires the GO's RSA
+	// public key to encrypt the per-transaction AES key.
+	enc, err := cfg.LoadEncryptor()
+	if err != nil {
+		log.Fatalf("load GO public key: %v", err)
+	}
+	srv := NewServer(store, enc)
 
 	addr := getEnv("GOVPAY_ADDR", cfg.Server.Addr)
 	server := &http.Server{

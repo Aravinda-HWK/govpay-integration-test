@@ -13,7 +13,7 @@ service:
 # here — supply them at deploy time, e.g.:
 #   helm upgrade --install govpay-mock ./helm/govpay-mock -n nsw-infra-staging \
 #     --set goEndpoint.baseURL=https://<go-host> \
-#     --set goEndpoint.transactionKey=<32-char-key>
+#     --set-file encryption.publicKey=../client/keys/go_public.pem
 #
 # When auth.enabled is true, also set goEndpoint.auth.tokenURL / clientId /
 # clientSecret (consider --set or a separate, untracked values file / secret).
@@ -21,13 +21,18 @@ goEndpoint:
   baseURL: ""
   presentmentPath: "/api/v1/payments/govpay/validate"
   updatePath: "/api/v1/payments/govpay/webhook"
-  transactionKey: ""
   auth:
     enabled: false
     tokenURL: ""
     tokenPath: "/api/govpayplus/v1.0/generatetoken"
     clientId: ""
     clientSecret: ""
+
+# Data encryption (spec §3): the GO's RSA public key (X.509 PEM) used to encrypt
+# the per-transaction AES key. Supply at deploy time as an inline PEM, e.g.:
+#     --set-file encryption.publicKey=../client/keys/go_public.pem
+encryption:
+  publicKey: ""
 
 route:
   enabled: true

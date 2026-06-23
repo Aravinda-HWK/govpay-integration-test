@@ -18,10 +18,11 @@ import (
 // requests with the encrypted-transaction-key header.
 type GOClient struct {
 	http *http.Client
+	enc  *Encryptor
 }
 
-func NewGOClient() *GOClient {
-	return &GOClient{http: &http.Client{Timeout: 15 * time.Second}}
+func NewGOClient(enc *Encryptor) *GOClient {
+	return &GOClient{http: &http.Client{Timeout: 15 * time.Second}, enc: enc}
 }
 
 // --- Wire types (mirror the GO API in ../client) ---
@@ -186,7 +187,22 @@ func (c *GOClient) Update(ctx context.Context, ep GoEndpoint, svc ServiceContext
 	return &out, nil
 }
 
-func (c *GOClient) post(ctx context.Context, fullURL string, ep GoEndpoint, bearer string, body, out interface{}) error {
+func (c *GOClient) post(ctx context.Context, fullURL string, ep GoEndpoint, bearer string, body goRequest, out interface{}) error {
+	// Per-transaction data encryption (spec §3): generate a 32-char AES key,
+	// encrypt each data[].value, and send the RSA-OAEP encrypted key in the
+	// TransactionKey header. The plain ep.TransactionKey is no longer sent.
+	aesKey, err := NewTransactionKey()
+	if err != nil {
+		return fmt.Errorf("generate transaction key: %w", err)
+	}
+	if err := EncryptValues(body.Data, aesKey); err != nil {
+		return fmt.Errorf("encrypt request values: %w", err)
+	}
+	transactionKey, err := c.enc.EncryptTransactionKey(aesKey)
+	if err != nil {
+		return fmt.Errorf("encrypt transaction key: %w", err)
+	}
+
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -196,7 +212,7 @@ func (c *GOClient) post(ctx context.Context, fullURL string, ep GoEndpoint, bear
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("TransactionKey", ep.TransactionKey)
+	req.Header.Set("TransactionKey", transactionKey)
 	if ep.Auth.Enabled && bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -213,7 +229,24 @@ func (c *GOClient) post(ctx context.Context, fullURL string, ep GoEndpoint, bear
 	if err := json.Unmarshal(raw, out); err != nil {
 		return fmt.Errorf("decode GO response: %w", err)
 	}
+	// Decrypt the response values with the same AES key (spec §3.1.7).
+	if err := decryptResponseValues(out, aesKey); err != nil {
+		return fmt.Errorf("decrypt GO response values: %w", err)
+	}
 	return nil
+}
+
+// decryptResponseValues decrypts the InitialValue of every object in a
+// presentment or update response in place.
+func decryptResponseValues(out interface{}, aesKey []byte) error {
+	switch v := out.(type) {
+	case *PresentmentResponse:
+		return decryptPresentmentValues(v.PresentmentData, aesKey)
+	case *UpdateResponse:
+		return decryptPresentmentValues(v.PaymentData, aesKey)
+	default:
+		return fmt.Errorf("unsupported response type %T", out)
+	}
 }
 
 // extractMessage pulls a human-readable message from a GO error body

@@ -21,6 +21,46 @@ export GOVPAY_IDP_ISSUER="https://mgt.apig.leco.lk:443/oauth2/token"  # optional
 export GOVPAY_IDP_AUDIENCE="<client_id>"                          # optional "aud" check
 ```
 
+## Data encryption (spec §3)
+
+Presentment/update payloads are encrypted end-to-end with GovPay+, per the
+"Security Standards for Data Encryption" section of the spec. **This is always
+on** — the GO needs its RSA private key to start.
+
+```bash
+export GOVPAY_RSA_PRIVATE_KEY_FILE="keys/go_private.pem"   # default; PEM (PKCS#8 or PKCS#1)
+```
+
+How a request is processed:
+
+1. The `TransactionKey` header carries a 32-char AES-256 key, RSA-OAEP encrypted
+   with **this GO's public key** (base64). The GO decrypts it with its private key.
+2. Each `data[].value` is AES-256-GCM encrypted with that key (base64). The GO
+   decrypts them before validation.
+3. The response `initialValue` of every object is re-encrypted with the same AES
+   key so GovPay+ can decrypt it.
+
+Failure modes follow §3.1.6: a request that fails validation returns **400**; a
+`TransactionKey`/value that fails to decrypt returns **401**.
+
+Algorithm standards (§3.2): RSA-OAEP(SHA-256)/2048 for the key; AES-256-GCM with
+the IV = first 12 bytes of the AES key for the payload.
+
+### Generating the keypair
+
+Private keys are **not** committed (`*_private.pem` and `client/keys/` are
+git-ignored). Generate a local keypair before the first run — give the private
+key to the GO here and the matching public key to the GovPay+ mock:
+
+```bash
+mkdir -p keys ../server/keys
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/go_private.pem
+openssl rsa -in keys/go_private.pem -pubout -out ../server/keys/go_public.pem
+```
+
+For OpenShift the private key is delivered via a `Secret` (`secretKeyRef`), not a
+file — see the Helm chart's `encryption` values.
+
 ## IDP / token handling
 
 The token endpoint and token validation are driven by the IDP env vars above:

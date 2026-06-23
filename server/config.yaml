@@ -1,35 +1,27 @@
-# GovPay+ mock server configuration.
-#
-# The GO endpoint URLs and credentials below are intentionally left blank — they
-# are environment/deployment specific and are supplied at runtime via:
-#   - environment variables (GOVPAY_GO_BASE_URL, GOVPAY_GO_TRANSACTION_KEY,
-#     GOVPAY_AUTH_ENABLED, GOVPAY_AUTH_TOKEN_URL, GOVPAY_AUTH_CLIENT_ID,
-#     GOVPAY_AUTH_CLIENT_SECRET, ...) — set by the Helm chart at deploy time, or
-#   - the Settings tab in the UI (persisted back here when the filesystem is writable).
-#
-# For local development, either fill in baseURL/transactionKey below or export
-# the env vars before running.
-
 server:
-  addr: ":9091"
+  addr: ":9091" # GovPay+ server + UI port
 
 goEndpoint:
-  baseURL: ""
+  baseURL: "http://localhost:8080"
   presentmentPath: "/api/v1/payments/govpay/validate"
   updatePath: "/api/v1/payments/govpay/webhook"
-  # 32-character transaction key sent in the TransactionKey header (see spec §3).
-  transactionKey: ""
+  # transactionKey is no longer sent in clear: a fresh 32-char AES key is
+  # generated per call, RSA-encrypted with the GO public key (see encryption
+  # below) and sent in the TransactionKey header (spec §3).
   auth:
-    enabled: false
-    # Full token endpoint URL (can be a different host than baseURL). If empty,
-    # falls back to baseURL + tokenPath.
-    tokenURL: ""
+    enabled: false # true → obtain a bearer token before each call
     tokenPath: "/api/govpayplus/v1.0/generatetoken"
-    clientId: ""
-    clientSecret: ""
+    clientId: "govpay"
+    clientSecret: "govpay"
 
-# Sub-institutions and their services (each mapped to one collection account).
-# These form the service catalog shown in the UI.
+# Data encryption (spec §3). The GO's RSA public key (X.509 PEM) is used to
+# encrypt the per-transaction AES key. Use publicKey for an inline PEM, or
+# publicKeyFile for a path (default: keys/go_public.pem).
+encryption:
+  publicKeyFile: "keys/go_public.pem"
+
+# Sub-institutions, each with services. Every service collects into one account
+# (fixed; the payer cannot choose it).
 subInstitutions:
   - id: "001"
     name: "FCAU"
@@ -37,23 +29,24 @@ subInstitutions:
       - id: "001"
         name: "Application Fee"
         account:
-          number: "1000200030004000"
-          name: "FCAU Application Fee Collection"
+          {
+            number: "1000200030004000",
+            name: "FCAU Application Fee Collection",
+          }
       - id: "002"
         name: "Renewal Fee"
-        account:
-          number: "1000200030004001"
-          name: "FCAU Renewal Collection"
+        account: { number: "1000200030004001", name: "FCAU Renewal Collection" }
   - id: "002"
     name: "NPQS"
     services:
       - id: "001"
         name: "Certification Fee"
         account:
-          number: "2000300040005000"
-          name: "NPQS Certification Collection"
-      - id: "002"
-        name: "Inspection Fee"
-        account:
-          number: "2000300040005001"
-          name: "NPQS Inspection Collection"
+          { number: "2000300040005000", name: "NPQS Certification Collection" }
+
+# Mock payer bank accounts (the source accounts a citizen pays from).
+bank:
+  accounts:
+    - { number: "100100100100", name: "John Doe", balance: 250000.00 }
+    - { number: "200200200200", name: "Jane Smith", balance: 1000000.00 }
+    - { number: "300300300300", name: "Acme Pvt Ltd", balance: 50000.00 }

@@ -12,6 +12,29 @@ env:
   GOVPAY_ADDR: ":8080"
   GOVPAY_TOKEN_TTL_SECONDS: "3600"
 
+# Data encryption (spec §3). The GO's RSA private key (PEM, PKCS#8 or PKCS#1)
+# used to decrypt the per-transaction AES key and request values. Required.
+#
+# The key is delivered to the pod via a Kubernetes Secret referenced with
+# secretKeyRef (never an inline env value). Two ways to provide it:
+#
+#  1. Pre-create the Secret yourself and point the chart at it (key stays out of
+#     Helm release values — preferred):
+#       oc create secret generic govpay-rsa \
+#         --from-file=privateKey=keys/go_private.pem -n <ns>
+#       helm upgrade ... --set encryption.existingSecret=govpay-rsa
+#
+#  2. Let Helm create/manage the Secret "<release>-rsa" from an inline PEM:
+#       helm upgrade ... --set-file encryption.privateKey=keys/go_private.pem
+encryption:
+  # Inline PEM. When set (and existingSecret is empty) Helm creates the Secret.
+  privateKey: ""
+  # Name of a pre-existing Secret to read the key from. Takes precedence over
+  # privateKey; when set, Helm does not create or manage a Secret.
+  existingSecret: ""
+  # Key within the Secret that holds the PEM.
+  secretKey: "privateKey"
+
 # IDP (OAuth2) integration. Leave values empty to keep local mock-token behaviour.
 idp:
   # When set, /generatetoken proxies the caller's Basic-auth credentials to this
