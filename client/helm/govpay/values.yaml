@@ -1,9 +1,9 @@
 image:
-  repository: ghcr.io/aravinda-hwk/govpay-integration-test
-  tag: "latest"
-  # Always re-pull because the "latest" tag is mutable; without this a node
-  # keeps serving its cached image and never picks up a new push.
-  pullPolicy: Always
+  repository: docker.io/mushrafmim/govpay-integration
+  tag: "v0.1.0"
+  # Immutable tag, so a cached image is always the right one. Bump image.tag to
+  # roll out a new build.
+  pullPolicy: IfNotPresent
 
 service:
   port: 8080

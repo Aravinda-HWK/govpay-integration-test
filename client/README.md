@@ -35,16 +35,22 @@ How a request is processed:
 
 1. The `TransactionKey` header carries a 32-char AES-256 key, RSA-OAEP encrypted
    with **this GO's public key** (base64). The GO decrypts it with its private key.
-2. Each `data[].value` is AES-256-GCM encrypted with that key (base64). The GO
-   decrypts them before validation.
-3. The response `initialValue` of every object is re-encrypted with the same AES
-   key so GovPay+ can decrypt it.
+2. **Every field** of each `data[]` element (`seq`, `paramName`, `value`) is
+   AES-256-CBC encrypted with that key (base64). The GO decrypts them before
+   validation.
+3. **Every field** of each response object is encrypted with the same AES key so
+   GovPay+ can decrypt it. Empty fields are encrypted as empty strings. Because
+   the whole object is transmitted as encrypted strings, numeric/boolean fields
+   (e.g. `maxLength`, `rows`, `isPaymentReference`) carry their string form
+   (`"50"`, `"true"`) before encryption. The `returnedValue` field name is used
+   on the response (per §3.4).
 
 Failure modes follow §3.1.6: a request that fails validation returns **400**; a
-`TransactionKey`/value that fails to decrypt returns **401**.
+`TransactionKey`/field that fails to decrypt returns **401**.
 
-Algorithm standards (§3.2): RSA-OAEP(SHA-256)/2048 for the key; AES-256-GCM with
-the IV = first 12 bytes of the AES key for the payload.
+Algorithm standards (§3.2): RSA-OAEP(SHA-256)/MGF1(SHA-256)/2048 for the key;
+AES-256-CBC with PKCS7 padding and IV = first 16 bytes of the AES key for the
+payload.
 
 ### Generating the keypair
 

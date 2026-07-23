@@ -91,8 +91,12 @@ For each call GovPay+:
 1. generates a fresh 32-character AES-256 transaction key;
 2. RSA-OAEP(SHA-256) encrypts it with the GO public key → the `TransactionKey`
    header (the plaintext key is no longer sent);
-3. AES-256-GCM encrypts each `data[].value` (IV = first 12 bytes of the AES key);
-4. decrypts the response `initialValue`s with the same AES key.
+3. AES-256-CBC (PKCS7 padding, IV = first 16 bytes of the AES key) encrypts
+   **every field** of each `data[]` element (`seq`, `paramName`, `value`);
+4. decrypts **every field** of each response object with the same AES key.
+   The response objects are entirely string-typed on the wire (numeric/boolean
+   fields carry their string form), and the response uses the `returnedValue`
+   field name (spec §3.4).
 
 Point GovPay+ at the GO's public key via config (`encryption.publicKeyFile` /
 `encryption.publicKey`) or env (`GOVPAY_GO_PUBLIC_KEY_FILE` / `GOVPAY_GO_PUBLIC_KEY`).

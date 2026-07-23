@@ -34,22 +34,25 @@ func TestNewTransactionKeyLength(t *testing.T) {
 	}
 }
 
-func TestAESGCMRoundTrip(t *testing.T) {
+// TestAESCBCRoundTrip verifies AES-256-CBC + PKCS7 with IV = key[:16]
+// (spec §3.2.2) round-trips across a range of plaintext lengths.
+func TestAESCBCRoundTrip(t *testing.T) {
 	key, _ := NewTransactionKey()
-	const plain = "ABC123456"
-	ct, err := aesGCMEncrypt(key, plain)
-	if err != nil {
-		t.Fatalf("encrypt: %v", err)
-	}
-	if ct == plain {
-		t.Fatal("ciphertext equals plaintext")
-	}
-	got, err := aesGCMDecrypt(key, ct)
-	if err != nil {
-		t.Fatalf("decrypt: %v", err)
-	}
-	if got != plain {
-		t.Fatalf("got %q, want %q", got, plain)
+	for _, plain := range []string{"", "1", "refNo", "ABC123456", "1234567890123456", "24000.00"} {
+		ct, err := aesCBCEncrypt(key, plain)
+		if err != nil {
+			t.Fatalf("encrypt %q: %v", plain, err)
+		}
+		if plain != "" && ct == plain {
+			t.Fatalf("ciphertext equals plaintext for %q", plain)
+		}
+		got, err := aesCBCDecrypt(key, ct)
+		if err != nil {
+			t.Fatalf("decrypt %q: %v", plain, err)
+		}
+		if got != plain {
+			t.Fatalf("round trip: got %q, want %q", got, plain)
+		}
 	}
 }
 
@@ -76,20 +79,33 @@ func TestTransactionKeyRSARoundTrip(t *testing.T) {
 	}
 }
 
-func TestEncryptValuesRoundTrip(t *testing.T) {
+// TestEncryptParamsRoundTrip verifies that seq, paramName and value of every
+// request item are all encrypted (spec §3.1) and decrypt back to plaintext.
+func TestEncryptParamsRoundTrip(t *testing.T) {
 	key, _ := NewTransactionKey()
-	params := []Param{{Seq: "1", ParamName: "refNo", Value: "ABC123456"}, {Seq: "2", ParamName: "amount", Value: 24000.00}}
-	if err := EncryptValues(params, key); err != nil {
-		t.Fatalf("EncryptValues: %v", err)
+	params := []Param{
+		{Seq: "1", ParamName: "refNo", Value: "ABC123456"},
+		{Seq: "2", ParamName: "amount", Value: 24000.00},
 	}
-	if params[0].Value == "ABC123456" {
-		t.Fatal("refNo not encrypted")
+	if err := EncryptParams(params, key); err != nil {
+		t.Fatalf("EncryptParams: %v", err)
 	}
-	v0, err := aesGCMDecrypt(key, params[0].Value.(string))
+	if params[0].ParamName == "refNo" || params[0].Value == "ABC123456" {
+		t.Fatal("seq/paramName/value should all be encrypted")
+	}
+
+	// seq and paramName round-trip.
+	if got, _ := aesCBCDecrypt(key, params[0].Seq); got != "1" {
+		t.Fatalf("seq roundtrip: got %q, want 1", got)
+	}
+	if got, _ := aesCBCDecrypt(key, params[0].ParamName); got != "refNo" {
+		t.Fatalf("paramName roundtrip: got %q, want refNo", got)
+	}
+	v0, err := aesCBCDecrypt(key, params[0].Value.(string))
 	if err != nil || v0 != "ABC123456" {
-		t.Fatalf("refNo roundtrip: %q err=%v", v0, err)
+		t.Fatalf("refNo value roundtrip: %q err=%v", v0, err)
 	}
-	v1, err := aesGCMDecrypt(key, params[1].Value.(string))
+	v1, err := aesCBCDecrypt(key, params[1].Value.(string))
 	if err != nil || v1 != "24000" {
 		t.Fatalf("amount roundtrip: %q err=%v", v1, err)
 	}

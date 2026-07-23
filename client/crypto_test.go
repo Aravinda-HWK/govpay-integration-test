@@ -20,22 +20,47 @@ func testDecryptor(t *testing.T) *Decryptor {
 	return d
 }
 
-func TestAESGCMRoundTrip(t *testing.T) {
+// TestAESCBCRoundTrip verifies AES-256-CBC + PKCS7 with IV = key[:16]
+// (spec §3.2.2) over a range of plaintext lengths, including empty and
+// block-aligned inputs.
+func TestAESCBCRoundTrip(t *testing.T) {
 	key := make([]byte, aesKeyLen)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
 	}
-	const plain = "ABC123456"
-	ct, err := aesGCMEncrypt(key, plain)
-	if err != nil {
-		t.Fatalf("encrypt: %v", err)
+	for _, plain := range []string{
+		"", "1", "refNo", "ABC123456",
+		"1234567890123456",  // exactly one block
+		"12345678901234567", // one byte into a second block
+		"24000.00",
+	} {
+		ct, err := aesCBCEncrypt(key, plain)
+		if err != nil {
+			t.Fatalf("encrypt %q: %v", plain, err)
+		}
+		got, err := aesCBCDecrypt(key, ct)
+		if err != nil {
+			t.Fatalf("decrypt %q: %v", plain, err)
+		}
+		if got != plain {
+			t.Fatalf("round trip: got %q, want %q", got, plain)
+		}
 	}
-	got, err := aesGCMDecrypt(key, ct)
-	if err != nil {
-		t.Fatalf("decrypt: %v", err)
+}
+
+// TestAESCBCIVIsKeyPrefix asserts the IV is exactly the first 16 bytes of the
+// transaction key, per spec §3.2.2.
+func TestAESCBCIVIsKeyPrefix(t *testing.T) {
+	key := make([]byte, aesKeyLen)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
 	}
-	if got != plain {
-		t.Fatalf("got %q, want %q", got, plain)
+	_, iv, err := newCBC(key)
+	if err != nil {
+		t.Fatalf("newCBC: %v", err)
+	}
+	if string(iv) != string(key[:ivLen]) {
+		t.Fatal("IV is not the first 16 bytes of the key")
 	}
 }
 
@@ -73,19 +98,58 @@ func TestDecryptTransactionKeyRejectsPlaintext(t *testing.T) {
 	}
 }
 
-func TestDecryptValuesInPlace(t *testing.T) {
+// TestDecryptParamsInPlace verifies that seq, paramName and value of each
+// request item are all decrypted (spec §3.1: GovPay+ encrypts all three).
+func TestDecryptParamsInPlace(t *testing.T) {
 	key := make([]byte, aesKeyLen)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
 	}
-	ct, _ := aesGCMEncrypt(key, "ABC123456")
-	params := []Param{{Seq: "1", ParamName: "refNo", Value: ct}}
+	encSeq, _ := aesCBCEncrypt(key, "1")
+	encName, _ := aesCBCEncrypt(key, "refNo")
+	encVal, _ := aesCBCEncrypt(key, "ABC123456")
+	params := []Param{{Seq: encSeq, ParamName: encName, Value: encVal}}
+
 	d := &Decryptor{}
-	if err := d.DecryptValues(params, key); err != nil {
-		t.Fatalf("DecryptValues: %v", err)
+	if err := d.DecryptParams(params, key); err != nil {
+		t.Fatalf("DecryptParams: %v", err)
 	}
-	if params[0].Value != "ABC123456" {
-		t.Fatalf("got %v, want ABC123456", params[0].Value)
+	if params[0].Seq != "1" || params[0].ParamName != "refNo" || params[0].Value != "ABC123456" {
+		t.Fatalf("got %+v, want seq=1 paramName=refNo value=ABC123456", params[0])
+	}
+}
+
+// TestEncryptPresentmentValuesEveryField verifies every field of a response
+// object is encrypted — including empty fields (encrypted empty strings) — and
+// that decrypting with the same key restores the plaintext (spec §3.1.7).
+func TestEncryptPresentmentValuesEveryField(t *testing.T) {
+	key := make([]byte, aesKeyLen)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	objs := buildPresentmentData(&BillRecord{
+		RefNo: "ABC123456", TaxpayerName: "Jane Smith", TaxType: "VAT",
+		BillingPeriod: "2026-Q1", Amount: 24000.00,
+	})
+	if err := encryptPresentmentValues(objs, key); err != nil {
+		t.Fatalf("encryptPresentmentValues: %v", err)
+	}
+
+	// The amount object (seq 5) carries the payable amount; its InitialValue
+	// must round-trip back to the formatted amount string, and its empty
+	// fields (mask, returnedValue) must be encrypted empty strings.
+	amount := objs[4]
+	if amount.Mask == "" || amount.ReturnValue == "" {
+		t.Fatal("empty fields should be encrypted, not left blank")
+	}
+	if got, err := aesCBCDecrypt(key, amount.Mask); err != nil || got != "" {
+		t.Fatalf("mask decrypt: got %q err %v, want empty", got, err)
+	}
+	if got, err := aesCBCDecrypt(key, amount.InitialValue); err != nil || got != "24000.00" {
+		t.Fatalf("amount decrypt: got %q err %v, want 24000.00", got, err)
+	}
+	if got, err := aesCBCDecrypt(key, amount.IsPaymentAmount); err != nil || got != "true" {
+		t.Fatalf("isPaymentAmount decrypt: got %q err %v, want true", got, err)
 	}
 }
 

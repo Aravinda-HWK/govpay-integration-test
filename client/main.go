@@ -73,26 +73,30 @@ type PresentmentResponse struct {
 	PresentmentData []PresentmentObject `json:"presentmentData"`
 }
 
+// PresentmentObject fields are all strings on the wire: per spec §3 every field
+// of a response object is AES-CBC encrypted (and encrypted output is base64
+// text), so numeric/boolean fields carry their string form (e.g. "50", "true")
+// before encryption.
 type PresentmentObject struct {
-	ObjType       string           `json:"objType"`
-	Seq           string           `json:"seq"`
-	ID            string           `json:"id"`
-	Placeholder   string           `json:"placeholder"`
-	InitialValue  interface{}      `json:"initialValue"`
-	DataType      string           `json:"datatype"`
-	MaxLength     int              `json:"maxLength"`
-	SelectionType string           `json:"selectionType"`
-	Mask          string           `json:"mask"`
-	NotNull       string           `json:"notNull"`
-	Enabled       string           `json:"enabled"`
-	Returned      string           `json:"returned"`
-	Rows          int              `json:"rows"`
-	Cols          int              `json:"cols"`
+	ObjType            string           `json:"objType"`
+	Seq                string           `json:"seq"`
+	ID                 string           `json:"id"`
+	Placeholder        string           `json:"placeholder"`
+	InitialValue       string           `json:"initialValue"`
+	DataType           string           `json:"datatype"`
+	MaxLength          string           `json:"maxLength"`
+	SelectionType      string           `json:"selectionType"`
+	Mask               string           `json:"mask"`
+	NotNull            string           `json:"notNull"`
+	Enabled            string           `json:"enabled"`
+	Returned           string           `json:"returned"`
+	Rows               string           `json:"rows"`
+	Cols               string           `json:"cols"`
 	ReturnParam        string           `json:"returnedParam"`
-	IsPaymentReference bool             `json:"isPaymentReference,omitempty"`
-	IsPaymentAmount    bool             `json:"isPaymentAmount,omitempty"`
-	ReturnValue        string           `json:"returnValue"`
-	ObjData            []ComboItem      `json:"objData"`
+	IsPaymentReference string           `json:"isPaymentReference"`
+	IsPaymentAmount    string           `json:"isPaymentAmount"`
+	ReturnValue        string           `json:"returnedValue"`
+	ObjData            []ComboItem      `json:"objData,omitempty"`
 	TableData          *TableDataObject `json:"tableData,omitempty"`
 }
 
@@ -132,18 +136,18 @@ type PaymentItem struct {
 	Seq           string           `json:"seq"`
 	ID            string           `json:"id"`
 	Placeholder   string           `json:"placeholder"`
-	InitialValue  interface{}      `json:"initialValue"`
+	InitialValue  string           `json:"initialValue"`
 	DataType      string           `json:"datatype"`
-	MaxLength     int              `json:"maxLength"`
+	MaxLength     string           `json:"maxLength"`
 	SelectionType string           `json:"selectionType"`
 	Mask          string           `json:"mask"`
 	NotNull       string           `json:"notNull"`
 	Enabled       string           `json:"enabled"`
 	Returned      string           `json:"returned"`
-	Rows          int              `json:"rows"`
-	Cols          int              `json:"cols"`
+	Rows          string           `json:"rows"`
+	Cols          string           `json:"cols"`
 	ReturnParam   string           `json:"returnedParam"`
-	ReturnValue   string           `json:"returnValue"`
+	ReturnValue   string           `json:"returnedValue"`
 	TableData     *TableDataObject `json:"tableData,omitempty"`
 }
 
@@ -334,7 +338,7 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
-		// Decrypt the transaction key (RSA) then the request values (AES-GCM).
+		// Decrypt the transaction key (RSA) then the request fields (AES-CBC).
 		// Per spec §3.1.6 a decryption/verification failure is 401, not 400.
 		aesKey, err := cfg.Decryptor.DecryptTransactionKey(r.Header.Get("TransactionKey"))
 		if err != nil {
@@ -348,7 +352,7 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
-		if err := cfg.Decryptor.DecryptValues(req.Data, aesKey); err != nil {
+		if err := cfg.Decryptor.DecryptParams(req.Data, aesKey); err != nil {
 			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "could not decrypt request values"})
 			return
 		}
@@ -417,7 +421,7 @@ func updateHandler(cfg Config) http.HandlerFunc {
 			return
 		}
 
-		if err := cfg.Decryptor.DecryptValues(req.Data, aesKey); err != nil {
+		if err := cfg.Decryptor.DecryptParams(req.Data, aesKey); err != nil {
 			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "could not decrypt request values"})
 			return
 		}
@@ -576,43 +580,40 @@ func buildPresentmentData(bill *BillRecord) []PresentmentObject {
 		newPresentmentObject(2, "label", "Taxpayer Name", bill.TaxpayerName, "text", 50, false, false, "", false, false),
 		newPresentmentObject(3, "label", "Tax Type", bill.TaxType, "text", 50, false, false, "", false, false),
 		newPresentmentObject(4, "label", "Billing Period", bill.BillingPeriod, "text", 50, false, false, "", false, false),
-		newPresentmentObject(5, "textBox", "Amount To Be Paid (LKR)", bill.Amount, "decimal", 13, false, true, "amount", false, true),
+		newPresentmentObject(5, "textBox", "Amount To Be Paid (LKR)", formatAmount(bill.Amount), "decimal", 13, false, true, "amount", false, true),
 	}
+}
+
+// formatAmount renders a monetary amount as a fixed 2-decimal string (e.g.
+// 24000 -> "24000.00"). The string form is what gets encrypted and echoed back
+// by GovPay+ in the update request.
+func formatAmount(amount float64) string {
+	return strconv.FormatFloat(amount, 'f', 2, 64)
 }
 
 // newPresentmentObject builds a single presentment object with the common
 // defaults from the GovPay+ spec (§2.4.3.2), varying only the fields a caller
 // cares about.
-func newPresentmentObject(seq int, objType, placeholder string, initialValue interface{}, dataType string, maxLength int, enabled, returned bool, returnParam string, isPaymentReference, isPaymentAmount bool) PresentmentObject {
+func newPresentmentObject(seq int, objType, placeholder, initialValue, dataType string, maxLength int, enabled, returned bool, returnParam string, isPaymentReference, isPaymentAmount bool) PresentmentObject {
 	return PresentmentObject{
-		ObjType:       objType,
-		Seq:           strconv.Itoa(seq),
-		ID:            fmt.Sprintf("%03d%04d", seq, seq),
-		Placeholder:   placeholder,
-		InitialValue:  initialValue,
-		DataType:      dataType,
-		MaxLength:     maxLength,
-		SelectionType: "SINGLE",
-		Mask:          "",
-		NotNull:       "true",
-		Enabled:       boolToFlag(enabled),
-		Returned:      boolToFlag(returned),
-		Rows:          1,
-		Cols:          1,
+		ObjType:            objType,
+		Seq:                strconv.Itoa(seq),
+		ID:                 fmt.Sprintf("%03d%04d", seq, seq),
+		Placeholder:        placeholder,
+		InitialValue:       initialValue,
+		DataType:           dataType,
+		MaxLength:          strconv.Itoa(maxLength),
+		SelectionType:      "SINGLE",
+		Mask:               "",
+		NotNull:            "true",
+		Enabled:            boolToFlag(enabled),
+		Returned:           boolToFlag(returned),
+		Rows:               "1",
+		Cols:               "1",
 		ReturnParam:        returnParam,
-		IsPaymentReference: isPaymentReference,
-		IsPaymentAmount:    isPaymentAmount,
+		IsPaymentReference: boolToFlag(isPaymentReference),
+		IsPaymentAmount:    boolToFlag(isPaymentAmount),
 		ReturnValue:        "",
-		ObjData:            []ComboItem{},
-	}
-}
-
-func isDecimalValue(value interface{}) bool {
-	switch value.(type) {
-	case float32, float64, int, int32, int64, uint, uint32, uint64:
-		return true
-	default:
-		return false
 	}
 }
 
@@ -627,22 +628,23 @@ func buildPaymentData(params []Param, transactionID string) []PaymentItem {
 		if paramName == "" {
 			paramName = fmt.Sprintf("param_%d", i+1)
 		}
+		value, _ := param.Value.(string)
 
 		items = append(items, PaymentItem{
 			ObjType:       "label",
 			Seq:           seq,
 			ID:            fmt.Sprintf("%03d%04d", i+1, i+1),
 			Placeholder:   paramName,
-			InitialValue:  param.Value,
-			DataType:      valueDataType(param.Value),
-			MaxLength:     50,
+			InitialValue:  value,
+			DataType:      valueDataType(value),
+			MaxLength:     "50",
 			SelectionType: "SINGLE",
 			Mask:          "",
 			NotNull:       "true",
 			Enabled:       "false",
 			Returned:      "false",
-			Rows:          1,
-			Cols:          1,
+			Rows:          "1",
+			Cols:          "1",
 			ReturnParam:   "",
 			ReturnValue:   "",
 		})
@@ -656,14 +658,14 @@ func buildPaymentData(params []Param, transactionID string) []PaymentItem {
 		Placeholder:   "Receipt Number",
 		InitialValue:  fmt.Sprintf("REC-%s", transactionID),
 		DataType:      "text",
-		MaxLength:     50,
+		MaxLength:     "50",
 		SelectionType: "SINGLE",
 		Mask:          "",
 		NotNull:       "true",
 		Enabled:       "false",
 		Returned:      "false",
-		Rows:          1,
-		Cols:          1,
+		Rows:          "1",
+		Cols:          "1",
 		ReturnParam:   "",
 		ReturnValue:   "",
 	})
@@ -676,14 +678,14 @@ func buildPaymentData(params []Param, transactionID string) []PaymentItem {
 		Placeholder:   "Status",
 		InitialValue:  "Payment recorded",
 		DataType:      "text",
-		MaxLength:     50,
+		MaxLength:     "50",
 		SelectionType: "SINGLE",
 		Mask:          "",
 		NotNull:       "true",
 		Enabled:       "false",
 		Returned:      "false",
-		Rows:          1,
-		Cols:          1,
+		Rows:          "1",
+		Cols:          "1",
 		ReturnParam:   "",
 		ReturnValue:   "",
 	})
@@ -691,9 +693,15 @@ func buildPaymentData(params []Param, transactionID string) []PaymentItem {
 	return items
 }
 
-func valueDataType(value interface{}) string {
-	if isDecimalValue(value) {
-		return "decimal"
+// valueDataType classifies a decrypted (string) value for the receipt label:
+// a value that looks like a decimal amount (contains a dot and parses as a
+// float) is "decimal", everything else is "text".
+func valueDataType(value string) string {
+	v := strings.TrimSpace(value)
+	if strings.Contains(v, ".") {
+		if _, err := strconv.ParseFloat(v, 64); err == nil {
+			return "decimal"
+		}
 	}
 	return "text"
 }

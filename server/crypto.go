@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -8,7 +9,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 )
@@ -19,12 +19,14 @@ import (
 //  1. generates a fresh 32-character AES-256 transaction key;
 //  2. RSA-OAEP encrypts that key with the GO's public key (the
 //     "TransactionKey" header, base64);
-//  3. AES-256-GCM encrypts each data[].value of the request;
-//  4. decrypts the response values with the same AES key.
+//  3. AES-256-CBC encrypts every field (seq, paramName, value) of each
+//     request data[] element;
+//  4. decrypts every field of each response object with the same AES key.
 //
 // Algorithm standards (spec §3.2):
-//   - TransactionKey: RSA / OAEP (SHA-256) / 2048-bit.
-//   - Payload:        AES / GCM / 256-bit, IV = first 12 bytes of the AES key.
+//   - TransactionKey: RSA / OAEP (SHA-256) / MGF1(SHA-256) / 2048-bit.
+//   - Payload:        AES / CBC / 256-bit, PKCS7 padding,
+//     IV = first 16 bytes of the AES key.
 type Encryptor struct {
 	pub *rsa.PublicKey
 }
@@ -33,9 +35,9 @@ type Encryptor struct {
 // (a "32-character" key per spec §3.1).
 const aesKeyLen = 32
 
-// gcmNonceLen is the GCM IV length: "First 12 bytes of cryptographic key"
-// (spec §3.2.2).
-const gcmNonceLen = 12
+// ivLen is the AES-CBC IV length. Per spec §3.2.2 the IV is the first 16 bytes
+// of the transaction key.
+const ivLen = 16
 
 // keyAlphabet is the printable ASCII alphabet used to build the 32-character
 // transaction key, so it is safe to log/inspect as plain text per spec §3.1.1.
@@ -91,42 +93,96 @@ func (e *Encryptor) EncryptTransactionKey(aesKey []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// EncryptValues encrypts the value of every data[] item in place (string form,
-// base64 AES-GCM).
-func EncryptValues(params []Param, key []byte) error {
+// EncryptParams encrypts every field (seq, paramName, value) of each request
+// data[] item in place with AES-256-CBC (spec §3.1: all three are encrypted).
+func EncryptParams(params []Param, key []byte) error {
 	for i := range params {
-		enc, err := aesGCMEncrypt(key, valueToString(params[i].Value))
+		seq, err := aesCBCEncrypt(key, params[i].Seq)
 		if err != nil {
 			return err
 		}
-		params[i].Value = enc
+		params[i].Seq = seq
+
+		name, err := aesCBCEncrypt(key, params[i].ParamName)
+		if err != nil {
+			return err
+		}
+		params[i].ParamName = name
+
+		val, err := aesCBCEncrypt(key, valueToString(params[i].Value))
+		if err != nil {
+			return err
+		}
+		params[i].Value = val
 	}
 	return nil
 }
 
-// decryptPresentmentValues decrypts the InitialValue of every response object
-// in place (the GO encrypts them with the same transaction key, spec §3.1.7).
+// decryptPresentmentValues decrypts every field of every response object in
+// place (the GO encrypts them all with the transaction key, spec §3.1.7).
 func decryptPresentmentValues(objs []PresentmentObject, key []byte) error {
 	for i := range objs {
-		plain, err := decryptInitialValue(objs[i].InitialValue, key)
-		if err != nil {
+		if err := decryptPresentmentObject(&objs[i], key); err != nil {
 			return err
 		}
-		objs[i].InitialValue = plain
 	}
 	return nil
 }
 
-func decryptInitialValue(v interface{}, key []byte) (string, error) {
-	s, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("encrypted initialValue must be a string")
+func decryptPresentmentObject(o *PresentmentObject, key []byte) error {
+	if err := decryptFields(key,
+		&o.ObjType, &o.Seq, &o.ID, &o.Placeholder, &o.InitialValue,
+		&o.DataType, &o.MaxLength, &o.SelectionType, &o.Mask, &o.NotNull,
+		&o.Enabled, &o.Returned, &o.Rows, &o.Cols, &o.ReturnParam,
+		&o.IsPaymentReference, &o.IsPaymentAmount, &o.ReturnValue,
+	); err != nil {
+		return err
 	}
-	return aesGCMDecrypt(key, s)
+	for j := range o.ObjData {
+		if err := decryptFields(key, &o.ObjData[j].ID, &o.ObjData[j].Data); err != nil {
+			return err
+		}
+	}
+	if o.TableData != nil {
+		for j := range o.TableData.Header {
+			if err := decryptFields(key, &o.TableData.Header[j].DataType, &o.TableData.Header[j].Value, &o.TableData.Header[j].Enabled); err != nil {
+				return err
+			}
+		}
+		for j := range o.TableData.RowData {
+			if err := decryptFields(key, &o.TableData.RowData[j].DataType, &o.TableData.RowData[j].Value, &o.TableData.RowData[j].Enabled); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
-// valueToString renders a JSON value as the plaintext to encrypt: strings pass
-// through unchanged, everything else is JSON-encoded (so 1000.00 -> "1000").
+// decryptFields decrypts each referenced base64 AES-CBC field in place.
+func decryptFields(key []byte, fields ...*string) error {
+	for _, f := range fields {
+		plain, err := decryptField(key, *f)
+		if err != nil {
+			return err
+		}
+		*f = plain
+	}
+	return nil
+}
+
+// decryptField decrypts a single base64 AES-CBC field. A field the GO omitted
+// entirely arrives as "" and is passed through unchanged (a spec "encrypted
+// empty string" is non-empty ciphertext, so this only skips absent fields).
+func decryptField(key []byte, b64 string) (string, error) {
+	if b64 == "" {
+		return "", nil
+	}
+	return aesCBCDecrypt(key, b64)
+}
+
+// valueToString renders a request value as the plaintext to encrypt: strings
+// pass through unchanged; other scalars use their default string form. Request
+// values are strings in practice (refNo, echoed amount, status).
 func valueToString(v interface{}) string {
 	switch t := v.(type) {
 	case nil:
@@ -134,43 +190,47 @@ func valueToString(v interface{}) string {
 	case string:
 		return t
 	default:
-		b, err := json.Marshal(t)
-		if err != nil {
-			return fmt.Sprintf("%v", t)
-		}
-		return string(b)
+		return fmt.Sprintf("%v", t)
 	}
 }
 
-// aesGCMEncrypt encrypts plaintext with AES-256-GCM using nonce = key[:12]
-// (spec §3.2.2) and returns the base64 of (ciphertext||tag).
-func aesGCMEncrypt(key []byte, plaintext string) (string, error) {
-	gcm, nonce, err := newGCM(key)
+// aesCBCEncrypt encrypts plaintext with AES-256-CBC and PKCS7 padding, using
+// IV = key[:16] (spec §3.2.2), and returns the base64 of the ciphertext.
+func aesCBCEncrypt(key []byte, plaintext string) (string, error) {
+	block, iv, err := newCBC(key)
 	if err != nil {
 		return "", err
 	}
-	sealed := gcm.Seal(nil, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(sealed), nil
+	padded := pkcs7Pad([]byte(plaintext), block.BlockSize())
+	ciphertext := make([]byte, len(padded))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ciphertext, padded)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// aesGCMDecrypt reverses aesGCMEncrypt.
-func aesGCMDecrypt(key []byte, b64 string) (string, error) {
-	sealed, err := base64.StdEncoding.DecodeString(b64)
+// aesCBCDecrypt reverses aesCBCEncrypt.
+func aesCBCDecrypt(key []byte, b64 string) (string, error) {
+	ciphertext, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return "", fmt.Errorf("value not base64: %w", err)
 	}
-	gcm, nonce, err := newGCM(key)
+	block, iv, err := newCBC(key)
 	if err != nil {
 		return "", err
 	}
-	plain, err := gcm.Open(nil, nonce, sealed, nil)
-	if err != nil {
-		return "", fmt.Errorf("gcm open: %w", err)
+	if len(ciphertext) == 0 || len(ciphertext)%block.BlockSize() != 0 {
+		return "", fmt.Errorf("ciphertext is not a whole number of blocks")
 	}
-	return string(plain), nil
+	plaintext := make([]byte, len(ciphertext))
+	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plaintext, ciphertext)
+	unpadded, err := pkcs7Unpad(plaintext, block.BlockSize())
+	if err != nil {
+		return "", err
+	}
+	return string(unpadded), nil
 }
 
-func newGCM(key []byte) (cipher.AEAD, []byte, error) {
+// newCBC returns an AES cipher block and the IV (first 16 bytes of the key).
+func newCBC(key []byte) (cipher.Block, []byte, error) {
 	if len(key) != aesKeyLen {
 		return nil, nil, fmt.Errorf("aes key must be %d bytes", aesKeyLen)
 	}
@@ -178,9 +238,29 @@ func newGCM(key []byte) (cipher.AEAD, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	gcm, err := cipher.NewGCMWithNonceSize(block, gcmNonceLen)
-	if err != nil {
-		return nil, nil, err
+	return block, key[:ivLen], nil
+}
+
+// pkcs7Pad appends PKCS7 padding so the data is a whole number of blocks.
+func pkcs7Pad(data []byte, blockSize int) []byte {
+	pad := blockSize - len(data)%blockSize
+	return append(data, bytes.Repeat([]byte{byte(pad)}, pad)...)
+}
+
+// pkcs7Unpad removes and validates PKCS7 padding.
+func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
+	n := len(data)
+	if n == 0 || n%blockSize != 0 {
+		return nil, fmt.Errorf("invalid padded length")
 	}
-	return gcm, key[:gcmNonceLen], nil
+	pad := int(data[n-1])
+	if pad == 0 || pad > blockSize {
+		return nil, fmt.Errorf("invalid padding")
+	}
+	for _, b := range data[n-pad:] {
+		if int(b) != pad {
+			return nil, fmt.Errorf("invalid padding")
+		}
+	}
+	return data[:n-pad], nil
 }

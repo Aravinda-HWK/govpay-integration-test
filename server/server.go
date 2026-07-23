@@ -275,7 +275,7 @@ func extractReturnData(objs []PresentmentObject, refNo string) (float64, []Param
 		// Echo the value exactly as the GO returned it at validate time — the
 		// webhook compares the amount as a string, so converting it to a number
 		// here causes a "payment amount mismatch".
-		if o.IsPaymentAmount || strings.EqualFold(param, "amount") {
+		if strings.EqualFold(o.IsPaymentAmount, "true") || strings.EqualFold(param, "amount") {
 			amount = toFloat(o.InitialValue)
 		}
 		data = append(data, Param{Seq: strconv.Itoa(seq), ParamName: param, Value: o.InitialValue})

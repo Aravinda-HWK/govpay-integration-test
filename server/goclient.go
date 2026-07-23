@@ -47,27 +47,30 @@ type tokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-// PresentmentObject and PaymentItem mirror the GO response objects.
+// PresentmentObject mirrors the GO response objects. Every field is a string:
+// per spec §3 the GO encrypts every field, and encrypted output is base64 text,
+// so numeric/boolean fields arrive as their string form (e.g. "50", "true")
+// once decrypted.
 type PresentmentObject struct {
 	ObjType            string           `json:"objType"`
 	Seq                string           `json:"seq"`
 	ID                 string           `json:"id"`
 	Placeholder        string           `json:"placeholder"`
-	InitialValue       interface{}      `json:"initialValue"`
+	InitialValue       string           `json:"initialValue"`
 	DataType           string           `json:"datatype"`
-	MaxLength          int              `json:"maxLength"`
+	MaxLength          string           `json:"maxLength"`
 	SelectionType      string           `json:"selectionType"`
 	Mask               string           `json:"mask"`
 	NotNull            string           `json:"notNull"`
 	Enabled            string           `json:"enabled"`
 	Returned           string           `json:"returned"`
-	Rows               int              `json:"rows"`
-	Cols               int              `json:"cols"`
+	Rows               string           `json:"rows"`
+	Cols               string           `json:"cols"`
 	ReturnParam        string           `json:"returnedParam"`
-	ReturnValue        string           `json:"returnValue"`
-	IsPaymentReference bool             `json:"isPaymentReference,omitempty"`
-	IsPaymentAmount    bool             `json:"isPaymentAmount,omitempty"`
-	ObjData            []ComboItem      `json:"objData"`
+	ReturnValue        string           `json:"returnedValue"`
+	IsPaymentReference string           `json:"isPaymentReference,omitempty"`
+	IsPaymentAmount    string           `json:"isPaymentAmount,omitempty"`
+	ObjData            []ComboItem      `json:"objData,omitempty"`
 	TableData          *TableDataObject `json:"tableData,omitempty"`
 }
 
@@ -195,8 +198,8 @@ func (c *GOClient) post(ctx context.Context, fullURL string, ep GoEndpoint, bear
 	if err != nil {
 		return fmt.Errorf("generate transaction key: %w", err)
 	}
-	if err := EncryptValues(body.Data, aesKey); err != nil {
-		return fmt.Errorf("encrypt request values: %w", err)
+	if err := EncryptParams(body.Data, aesKey); err != nil {
+		return fmt.Errorf("encrypt request fields: %w", err)
 	}
 	transactionKey, err := c.enc.EncryptTransactionKey(aesKey)
 	if err != nil {
