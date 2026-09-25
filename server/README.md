@@ -91,7 +91,8 @@ For each call GovPay+:
 1. generates a fresh 32-character AES-256 transaction key;
 2. RSA-OAEP(SHA-256) encrypts it with the GO public key → the `TransactionKey`
    header (the plaintext key is no longer sent);
-3. AES-256-CBC (PKCS7 padding, IV = first 16 bytes of the AES key) encrypts
+3. AES-256-CBC (PKCS7 padding, AES key = SHA-256(transaction key), IV = first
+   16 bytes of that derived key) encrypts
    **every field** of each `data[]` element (`seq`, `paramName`, `value`);
 4. decrypts **every field** of each response object with the same AES key.
    The response objects are entirely string-typed on the wire (numeric/boolean

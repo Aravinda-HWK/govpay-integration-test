@@ -12,3 +12,6 @@ client/keys/
 
 *_public.pem
 server/ekys/
+
+# Local run config: holds IDP client credentials — never commit.
+server/config.local.yaml

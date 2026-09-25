@@ -1,6 +1,9 @@
 package main
 
-import "sync"
+import (
+	"sort"
+	"sync"
+)
 
 // BillRecord is the billing detail the GO holds for a single reference number.
 // In production these would be looked up from the GO's billing system keyed by
@@ -48,6 +51,36 @@ func NewBillStore() *BillStore {
 		{RefNo: "CUS202601", TaxpayerName: "Orient Imports", TaxType: "Customs Duty", BillingPeriod: "2026-Q1", Amount: 215000.00},
 		{RefNo: "PROP0001", TaxpayerName: "Anoma Senanayake", TaxType: "Property Tax", BillingPeriod: "2026", Amount: 8900.00},
 		{RefNo: "PROP0002", TaxpayerName: "Metro Developers", TaxType: "Property Tax", BillingPeriod: "2026", Amount: 156000.00},
+		{RefNo: "PROP0003", TaxpayerName: "Sunil Bandara", TaxType: "Property Tax", BillingPeriod: "2026", Amount: 7400.00},
+		{RefNo: "FCAU0004", TaxpayerName: "Blue Ocean Marine", TaxType: "FCAU Application Fee", BillingPeriod: "2026", Amount: 5000.00},
+		{RefNo: "FCAU0005", TaxpayerName: "Lanka Spice Traders", TaxType: "FCAU Renewal Fee", BillingPeriod: "2026", Amount: 2500.00},
+		{RefNo: "FCAU0006", TaxpayerName: "Serendib Tea Exports", TaxType: "FCAU Renewal Fee", BillingPeriod: "2026", Amount: 2500.00},
+		{RefNo: "NPQS0001", TaxpayerName: "Fresh Fields Produce", TaxType: "NPQS Certification Fee", BillingPeriod: "2026", Amount: 4250.00},
+		{RefNo: "NPQS0002", TaxpayerName: "Hill Country Nurseries", TaxType: "NPQS Certification Fee", BillingPeriod: "2026", Amount: 4250.00},
+		{RefNo: "NPQS0003", TaxpayerName: "Tropicana Fruits Ltd", TaxType: "NPQS Treatment Service Fee", BillingPeriod: "2026", Amount: 11750.00},
+		{RefNo: "SLTB0001", TaxpayerName: "Kandy Tea Factory", TaxType: "SLTB Levy Payment", BillingPeriod: "2026-Q1", Amount: 63500.00},
+		{RefNo: "SLTB0002", TaxpayerName: "Uva Highlands Estate", TaxType: "SLTB Levy Payment", BillingPeriod: "2026-Q1", Amount: 41200.00},
+		{RefNo: "SLTB0003", TaxpayerName: "Ruhuna Tea Brokers", TaxType: "SLTB Lab Test Fee", BillingPeriod: "2026", Amount: 3750.00},
+		{RefNo: "CDA0001", TaxpayerName: "Coconut Growers Coop", TaxType: "CDA Application Fee", BillingPeriod: "2026", Amount: 9000.00},
+		{RefNo: "CDA0002", TaxpayerName: "Palm Grove Industries", TaxType: "CDA Application Fee", BillingPeriod: "2026", Amount: 9000.00},
+		{RefNo: "VAT202603", TaxpayerName: "Metro Retail Chain", TaxType: "VAT", BillingPeriod: "2026-Q3", Amount: 187400.25},
+		{RefNo: "VAT202604", TaxpayerName: "Skyline Constructions", TaxType: "VAT", BillingPeriod: "2026-Q3", Amount: 76300.00},
+		{RefNo: "VAT202605", TaxpayerName: "Nuwara Beverages", TaxType: "VAT", BillingPeriod: "2026-Q4", Amount: 54900.50},
+		{RefNo: "INC202603", TaxpayerName: "Chamari Gunasekara", TaxType: "Income Tax", BillingPeriod: "2026-Q3", Amount: 22150.00},
+		{RefNo: "INC202604", TaxpayerName: "Pradeep Silva", TaxType: "Income Tax", BillingPeriod: "2026-Q3", Amount: 4875.75},
+		{RefNo: "INC202605", TaxpayerName: "Tharindu Weerasinghe", TaxType: "Income Tax", BillingPeriod: "2026-Q4", Amount: 31600.00},
+		{RefNo: "PAYE0003", TaxpayerName: "Orbit Software Pvt Ltd", TaxType: "PAYE", BillingPeriod: "2026-03", Amount: 88450.00},
+		{RefNo: "PAYE0004", TaxpayerName: "Lakeview Resorts", TaxType: "PAYE", BillingPeriod: "2026-04", Amount: 37900.00},
+		{RefNo: "NBT202602", TaxpayerName: "Galle Fort Traders", TaxType: "Nation Building Tax", BillingPeriod: "2026-Q2", Amount: 19450.00},
+		{RefNo: "SD202602", TaxpayerName: "Crown Insurance Ltd", TaxType: "Stamp Duty", BillingPeriod: "2026", Amount: 1850.00},
+		{RefNo: "SD202603", TaxpayerName: "Harbour Logistics", TaxType: "Stamp Duty", BillingPeriod: "2026", Amount: 4600.00},
+		{RefNo: "MV202602", TaxpayerName: "Nadeeka Herath", TaxType: "Motor Vehicle Fee", BillingPeriod: "2026", Amount: 8750.00},
+		{RefNo: "MV202603", TaxpayerName: "Express Transport Co", TaxType: "Motor Vehicle Fee", BillingPeriod: "2026", Amount: 96000.00},
+		{RefNo: "LIC0003", TaxpayerName: "Sunrise Poultry Farm", TaxType: "License Fee", BillingPeriod: "2026", Amount: 6000.00},
+		{RefNo: "LIC0004", TaxpayerName: "Northern Timber Mills", TaxType: "License Fee", BillingPeriod: "2026", Amount: 15000.00},
+		{RefNo: "CUS202602", TaxpayerName: "Pacific Machinery Imports", TaxType: "Customs Duty", BillingPeriod: "2026-Q2", Amount: 342750.00},
+		{RefNo: "CUS202603", TaxpayerName: "Silk Route Apparel", TaxType: "Customs Duty", BillingPeriod: "2026-Q3", Amount: 128900.00},
+		{RefNo: "TAX2027", TaxpayerName: "Malith Dissanayake", TaxType: "Income Tax", BillingPeriod: "2026-Q4", Amount: 2350.00},
 	}
 
 	bills := make(map[string]*BillRecord, len(seed))
@@ -89,4 +122,16 @@ func (s *BillStore) MarkPaid(refNo string) bool {
 	}
 	s.paid[refNo] = true
 	return true
+}
+
+// All returns every bill, sorted by refNo, for diagnostics.
+func (s *BillStore) All() []*BillRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*BillRecord, 0, len(s.bills))
+	for _, b := range s.bills {
+		out = append(out, b)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].RefNo < out[j].RefNo })
+	return out
 }

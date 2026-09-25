@@ -48,9 +48,9 @@ func TestAESCBCRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAESCBCIVIsKeyPrefix asserts the IV is exactly the first 16 bytes of the
-// transaction key, per spec §3.2.2.
-func TestAESCBCIVIsKeyPrefix(t *testing.T) {
+// TestAESCBCIVIsDerivedKeyPrefix asserts the IV is the first 16 bytes of the
+// derived AES key, SHA-256(transaction key).
+func TestAESCBCIVIsDerivedKeyPrefix(t *testing.T) {
 	key := make([]byte, aesKeyLen)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
@@ -59,8 +59,29 @@ func TestAESCBCIVIsKeyPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newCBC: %v", err)
 	}
-	if string(iv) != string(key[:ivLen]) {
-		t.Fatal("IV is not the first 16 bytes of the key")
+	sum := sha256.Sum256(key)
+	if string(iv) != string(sum[:ivLen]) {
+		t.Fatal("IV is not the first 16 bytes of SHA-256(transaction key)")
+	}
+}
+
+// TestDecryptLiveGovPayRequest decrypts fields captured from a real GovPay+
+// presentment request (2026-09-25, txn 202008061689) with the transaction key
+// recovered from its TransactionKey header.
+func TestDecryptLiveGovPayRequest(t *testing.T) {
+	key := []byte("20260925045916fbf2e8db6be34901bf")
+	for cipherText, want := range map[string]string{
+		"RgRSAzT/ozEpkY4iixh1oA==": "1",
+		"qmSrayjMwoQ23dPqAI3mRQ==": "refNo",
+		"KKbC+bDkHMPm6rO4+dcNWA==": "1234",
+	} {
+		got, err := aesCBCDecrypt(key, cipherText)
+		if err != nil {
+			t.Fatalf("decrypt %s: %v", cipherText, err)
+		}
+		if got != want {
+			t.Fatalf("decrypt %s = %q, want %q", cipherText, got, want)
+		}
 	}
 }
 

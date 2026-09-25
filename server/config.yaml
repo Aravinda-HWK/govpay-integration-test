@@ -43,6 +43,26 @@ subInstitutions:
         name: "Certification Fee"
         account:
           { number: "2000300040005000", name: "NPQS Certification Collection" }
+      - id: "003"
+        name: "Treatment Service Fee"
+        account:
+          { number: "2000300040005002", name: "NPQS Treatment Collection" }
+  - id: "003"
+    name: "SLTB"
+    services:
+      - id: "001"
+        name: "Levy Payment"
+        account: { number: "3000400050006000", name: "SLTB Levy Collection" }
+      - id: "002"
+        name: "Lab Test Fee"
+        account: { number: "3000400050006001", name: "SLTB Lab Test Collection" }
+  - id: "004"
+    name: "CDA"
+    services:
+      - id: "001"
+        name: "Application Fee"
+        account:
+          { number: "4000500060007000", name: "CDA Application Fee Collection" }
 
 # Mock payer bank accounts (the source accounts a citizen pays from).
 bank:

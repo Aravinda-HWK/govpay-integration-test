@@ -29,8 +29,8 @@ import (
 //
 // Algorithm standards (spec §3.2):
 //   - TransactionKey: RSA / OAEP (SHA-256) / MGF1(SHA-256) / 2048-bit.
-//   - Payload:        AES / CBC / 256-bit, PKCS7 padding,
-//     IV = first 16 bytes of the AES key.
+//   - Payload:        AES / CBC / 256-bit, PKCS7 padding, with
+//     AES key = SHA-256(transaction key) and IV = first 16 bytes of that key.
 type Decryptor struct {
 	priv *rsa.PrivateKey
 }
@@ -39,8 +39,8 @@ type Decryptor struct {
 // (a "32-character" key per spec §3.1).
 const aesKeyLen = 32
 
-// ivLen is the AES-CBC IV length. Per spec §3.2.2 the IV is the first 16 bytes
-// of the transaction key.
+// ivLen is the AES-CBC IV length. The IV is the first 16 bytes of the derived
+// AES key, SHA-256(transaction key) — see deriveAESKey.
 const ivLen = 16
 
 // loadDecryptor reads a PEM-encoded RSA private key (PKCS#8 or PKCS#1) from
@@ -242,11 +242,22 @@ func aesCBCDecrypt(key []byte, b64 string) (string, error) {
 	return string(unpadded), nil
 }
 
-// newCBC returns an AES cipher block and the IV (first 16 bytes of the key).
-func newCBC(key []byte) (cipher.Block, []byte, error) {
-	if len(key) != aesKeyLen {
+// deriveAESKey turns the 32-character transaction key into the actual AES-256
+// key: SHA-256 of the transaction key bytes. This matches what GovPay+ does in
+// practice (verified against a live GovPay+ request), even though the spec
+// reads as if the transaction key were used directly.
+func deriveAESKey(txnKey []byte) []byte {
+	sum := sha256.Sum256(txnKey)
+	return sum[:]
+}
+
+// newCBC returns an AES-256 cipher block keyed with SHA-256(txnKey) and the IV
+// (first 16 bytes of that derived key).
+func newCBC(txnKey []byte) (cipher.Block, []byte, error) {
+	if len(txnKey) != aesKeyLen {
 		return nil, nil, fmt.Errorf("aes key must be %d bytes", aesKeyLen)
 	}
+	key := deriveAESKey(txnKey)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, nil, err

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strings"
@@ -95,16 +96,16 @@ func (v *idpVerifier) verify(token string) error {
 
 	now := time.Now()
 	if claims.Exp != 0 && now.Add(-clockSkewLeeway).After(time.Unix(claims.Exp, 0)) {
-		return fmt.Errorf("token expired")
+		return fmt.Errorf("token expired at %s", time.Unix(claims.Exp, 0).UTC().Format(time.RFC3339))
 	}
 	if claims.Nbf != 0 && now.Add(clockSkewLeeway).Before(time.Unix(claims.Nbf, 0)) {
-		return fmt.Errorf("token not yet valid")
+		return fmt.Errorf("token not yet valid (nbf %s)", time.Unix(claims.Nbf, 0).UTC().Format(time.RFC3339))
 	}
 	if v.issuer != "" && claims.Iss != v.issuer {
-		return fmt.Errorf("invalid token issuer")
+		return fmt.Errorf("invalid token issuer %q (expected %q)", claims.Iss, v.issuer)
 	}
 	if v.audience != "" && !claims.Aud.contains(v.audience) {
-		return fmt.Errorf("invalid token audience")
+		return fmt.Errorf("invalid token audience %v (expected %q)", []string(claims.Aud), v.audience)
 	}
 	return nil
 }
@@ -174,8 +175,10 @@ func (c *jwksCache) key(kid string) (*rsa.PublicKey, error) {
 	}
 
 	if err := c.refresh(); err != nil {
+		log.Printf("jwks: refresh from %s failed: %v", c.url, err)
 		if ok {
 			// Serve the stale-but-known key if the IDP is briefly unreachable.
+			log.Printf("jwks: serving stale cached key for kid %q", kid)
 			return cached, nil
 		}
 		return nil, err
@@ -213,16 +216,21 @@ func (c *jwksCache) refresh() error {
 	}
 
 	keys := make(map[string]*rsa.PublicKey, len(set.Keys))
+	kids := make([]string, 0, len(set.Keys))
 	for _, k := range set.Keys {
 		if k.Kty != "RSA" {
+			log.Printf("jwks: skipping kid %q (kty %q is not RSA)", k.Kid, k.Kty)
 			continue
 		}
 		pub, err := rsaPublicKeyFromJWK(k.N, k.E)
 		if err != nil {
+			log.Printf("jwks: skipping kid %q: %v", k.Kid, err)
 			continue
 		}
 		keys[k.Kid] = pub
+		kids = append(kids, k.Kid)
 	}
+	log.Printf("jwks: fetched %d RSA key(s) from %s: kids=%v", len(keys), c.url, kids)
 
 	c.mu.Lock()
 	c.keys = keys

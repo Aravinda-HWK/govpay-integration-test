@@ -1,12 +1,11 @@
-.git
-.gitignore
-.vscode
-.idea
-.DS_Store
-*.log
-*.tmp
-*.swp
-*.swo
-**/.venv
-node_modules
-helm
+# RSA private keys are injected at runtime via a Secret / env var — never bake
+# them into an image layer.
+keys/
+*_private.pem
+
+# Local build artifacts and charts are not needed by the image build.
+govpay-go-client
+client
+*.test
+helm/
+README.md

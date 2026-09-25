@@ -32,6 +32,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("load GO public key: %v", err)
 	}
+	keySource := cfg.Encryption.PublicKeyFile
+	if strings.TrimSpace(cfg.Encryption.PublicKey) != "" {
+		keySource = "config publicKey (inline)"
+	}
+	log.Printf("data encryption enabled (GO RSA public key=%s)", keySource)
+
 	srv := NewServer(store, enc)
 
 	addr := getEnv("GOVPAY_ADDR", cfg.Server.Addr)

@@ -153,6 +153,12 @@ type PaymentItem struct {
 
 func main() {
 	cfg := loadConfig()
+	logStartupConfig(cfg)
+	logKeyInfo(cfg.Decryptor)
+	logSampleBills(cfg.Bills)
+	if err := encryptionSelfTest(cfg.Decryptor, cfg.Bills); err != nil {
+		log.Fatalf("selftest: encryption self-test FAILED: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/govpayplus/v1.0/generatetoken", generateTokenHandler(cfg))
@@ -165,13 +171,15 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	log.Printf("GovPay+ GO API listening on %s", cfg.Addr)
+	log.Printf("GovPay+ GO API listening on %s (endpoints: /api/govpayplus/v1.0/{generatetoken,presentment,update})", cfg.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server error: %v", err)
 	}
 }
 
 func loadConfig() Config {
+	debugLogging = strings.EqualFold(getEnv("GOVPAY_LOG_LEVEL", "info"), "debug")
+
 	cfg := Config{
 		Addr:            getEnv("GOVPAY_ADDR", ":8080"),
 		BasicUser:       getEnv("GOVPAY_BASIC_USER", "govpay"),
@@ -194,6 +202,12 @@ func loadConfig() Config {
 		keySource = "GOVPAY_RSA_PRIVATE_KEY (inline)"
 	} else {
 		keyPath := getEnv("GOVPAY_RSA_PRIVATE_KEY_FILE", "keys/go_private.pem")
+		if st, statErr := os.Stat(keyPath); statErr == nil {
+			log.Printf("encryption: reading RSA private key file %s (%d bytes, mode %s, modified %s)",
+				keyPath, st.Size(), st.Mode(), st.ModTime().UTC().Format(time.RFC3339))
+		} else {
+			log.Printf("encryption: RSA private key file %s not accessible: %v", keyPath, statErr)
+		}
 		decryptor, err = loadDecryptor(keyPath)
 		keySource = keyPath
 	}
@@ -218,27 +232,21 @@ func loadConfig() Config {
 	return cfg
 }
 
-func logRequest(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-		next.ServeHTTP(w, r)
-	})
-}
-
 func generateTokenHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method_not_allowed", Message: "POST required"})
+			fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", fmt.Errorf("got %s", r.Method))
 			return
 		}
 		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "Content-Type must be application/x-www-form-urlencoded"})
+			fail(w, r, http.StatusBadRequest, "bad_request", "Content-Type must be application/x-www-form-urlencoded", fmt.Errorf("got %q", r.Header.Get("Content-Type")))
 			return
 		}
 		if err := r.ParseForm(); err != nil {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "invalid form"})
+			fail(w, r, http.StatusBadRequest, "bad_request", "invalid form", err)
 			return
 		}
+		logf(r, "token: grant_type=%q scope=%q", r.FormValue("grant_type"), r.FormValue("scope"))
 
 		// When an IDP token endpoint is configured, forward the caller's
 		// Basic-auth credentials to it as client_id/client_secret and relay the
@@ -250,11 +258,12 @@ func generateTokenHandler(cfg Config) http.HandlerFunc {
 
 		// Otherwise issue a local mock token (for local development).
 		if !checkBasicAuth(r, cfg.BasicUser, cfg.BasicPass) {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "invalid authorization"})
+			fail(w, r, http.StatusUnauthorized, "unauthorized", "invalid authorization",
+				fmt.Errorf("basic credentials did not match GOVPAY_BASIC_USER (got %s)", redactAuthorization(r.Header.Get("Authorization"))))
 			return
 		}
 		if r.FormValue("grant_type") != "client_credentials" {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "grant_type must be client_credentials"})
+			fail(w, r, http.StatusBadRequest, "bad_request", "grant_type must be client_credentials", nil)
 			return
 		}
 
@@ -264,6 +273,7 @@ func generateTokenHandler(cfg Config) http.HandlerFunc {
 			TokenType:   "Bearer",
 			ExpiresIn:   cfg.TokenTTLSeconds,
 		}
+		logf(r, "token: issued local mock token (expires_in=%ds)", cfg.TokenTTLSeconds)
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
@@ -274,7 +284,7 @@ func generateTokenHandler(cfg Config) http.HandlerFunc {
 func proxyTokenRequest(cfg Config, w http.ResponseWriter, r *http.Request) {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Basic ") {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "Basic authorization required"})
+		fail(w, r, http.StatusUnauthorized, "unauthorized", "Basic authorization required", fmt.Errorf("authorization header: %s", redactAuthorization(auth)))
 		return
 	}
 
@@ -290,24 +300,36 @@ func proxyTokenRequest(cfg Config, w http.ResponseWriter, r *http.Request) {
 
 	idpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, cfg.IDPTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "server_error", Message: "could not build IDP request"})
+		fail(w, r, http.StatusInternalServerError, "server_error", "could not build IDP request", err)
 		return
 	}
 	idpReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	idpReq.Header.Set("Accept", "application/json")
 	idpReq.Header.Set("Authorization", auth) // forward client_id:client_secret
 
+	logf(r, "token: proxying to IDP %s (client %s, grant_type=%s)", cfg.IDPTokenURL, redactAuthorization(auth), grant)
+	idpStart := time.Now()
 	idpResp, err := idpHTTPClient.Do(idpReq)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "bad_gateway", Message: "could not reach IDP token endpoint"})
+		fail(w, r, http.StatusBadGateway, "bad_gateway", "could not reach IDP token endpoint", err)
 		return
 	}
 	defer idpResp.Body.Close()
 
 	body, err := io.ReadAll(idpResp.Body)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, ErrorResponse{Error: "bad_gateway", Message: "could not read IDP response"})
+		fail(w, r, http.StatusBadGateway, "bad_gateway", "could not read IDP response", err)
 		return
+	}
+	logf(r, "token: IDP responded %d in %s (content-type=%q, %d bytes)",
+		idpResp.StatusCode, time.Since(idpStart).Round(time.Millisecond), idpResp.Header.Get("Content-Type"), len(body))
+	if idpResp.StatusCode != http.StatusOK {
+		logf(r, "ERROR token: IDP rejected the request: %s", truncate(string(body)))
+	} else {
+		var tok TokenResponse
+		if json.Unmarshal(body, &tok) == nil && tok.AccessToken != "" {
+			logf(r, "token: IDP issued %s token (expires_in=%d scope=%q) %s", tok.TokenType, tok.ExpiresIn, tok.Scope, jwtSummary(tok.AccessToken))
+		}
 	}
 
 	contentType := idpResp.Header.Get("Content-Type")
@@ -321,57 +343,28 @@ func proxyTokenRequest(cfg Config, w http.ResponseWriter, r *http.Request) {
 
 func presentmentHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method_not_allowed", Message: "POST required"})
-			return
-		}
-		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "Content-Type must be application/json"})
-			return
-		}
-		if err := authorizeBearer(cfg, r); err != nil {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: err.Error()})
-			return
-		}
-		if r.Header.Get("TransactionKey") == "" {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "missing TransactionKey"})
-			return
-		}
-
-		// Decrypt the transaction key (RSA) then the request fields (AES-CBC).
-		// Per spec §3.1.6 a decryption/verification failure is 401, not 400.
-		aesKey, err := cfg.Decryptor.DecryptTransactionKey(r.Header.Get("TransactionKey"))
-		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "invalid TransactionKey"})
-			return
-		}
-
-		req, err := parsePresentmentRequest(r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: err.Error()})
-			return
-		}
-
-		if err := cfg.Decryptor.DecryptParams(req.Data, aesKey); err != nil {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "could not decrypt request values"})
+		aesKey, req, ok := decryptRequest(cfg, w, r, "presentment")
+		if !ok {
 			return
 		}
 
 		refNo, err := validateRefNoOnly(req.Data)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: err.Error()})
+			fail(w, r, http.StatusBadRequest, "bad_request", err.Error(), fmt.Errorf("decrypted data=%s", toJSON(req.Data)))
 			return
 		}
 
 		bill, ok := cfg.Bills.Lookup(refNo)
 		if !ok {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "invalid_reference", Message: "invalid reference number"})
+			fail(w, r, http.StatusNotFound, "invalid_reference", "invalid reference number", fmt.Errorf("refNo %q is not a known bill (%d bills loaded)", refNo, len(cfg.Bills.All())))
 			return
 		}
 		if cfg.Bills.IsPaid(refNo) {
-			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "already_paid", Message: "payment already completed for this reference number"})
+			fail(w, r, http.StatusConflict, "already_paid", "payment already completed for this reference number", fmt.Errorf("refNo %q already paid", refNo))
 			return
 		}
+		logf(r, "presentment: bill found refNo=%s taxpayer=%q type=%q period=%s amount=%s",
+			bill.RefNo, bill.TaxpayerName, bill.TaxType, bill.BillingPeriod, formatAmount(bill.Amount))
 
 		resp := PresentmentResponse{
 			TransactionID:   req.TransactionID,
@@ -381,66 +374,44 @@ func presentmentHandler(cfg Config) http.HandlerFunc {
 			Message:         "Success",
 			PresentmentData: buildPresentmentData(bill),
 		}
+		debugf(r, "presentment: response (plaintext, before encryption): %s", toJSON(resp))
 		// Encrypt the response values with the same AES key (spec §3.1.7).
 		if err := encryptPresentmentValues(resp.PresentmentData, aesKey); err != nil {
-			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "server_error", Message: "could not encrypt response"})
+			fail(w, r, http.StatusInternalServerError, "server_error", "could not encrypt response", err)
 			return
 		}
+		logf(r, "presentment: success txn=%s refNo=%s (%d objects encrypted)", req.TransactionID, refNo, len(resp.PresentmentData))
 		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
 func updateHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method_not_allowed", Message: "POST required"})
-			return
-		}
-		if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "Content-Type must be application/json"})
-			return
-		}
-		if err := authorizeBearer(cfg, r); err != nil {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: err.Error()})
-			return
-		}
-		if r.Header.Get("TransactionKey") == "" {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "missing TransactionKey"})
-			return
-		}
-
-		aesKey, err := cfg.Decryptor.DecryptTransactionKey(r.Header.Get("TransactionKey"))
-		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "invalid TransactionKey"})
-			return
-		}
-
-		req, err := parsePresentmentRequest(r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: err.Error()})
-			return
-		}
-
-		if err := cfg.Decryptor.DecryptParams(req.Data, aesKey); err != nil {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Message: "could not decrypt request values"})
+		aesKey, req, ok := decryptRequest(cfg, w, r, "update")
+		if !ok {
 			return
 		}
 
 		refNo := findRefNo(req.Data)
 		if refNo == "" {
-			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "bad_request", Message: "refNo is required"})
+			fail(w, r, http.StatusBadRequest, "bad_request", "refNo is required", fmt.Errorf("decrypted data=%s", toJSON(req.Data)))
 			return
 		}
-		if _, ok := cfg.Bills.Lookup(refNo); !ok {
-			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "invalid_reference", Message: "invalid reference number"})
+		bill, ok := cfg.Bills.Lookup(refNo)
+		if !ok {
+			fail(w, r, http.StatusNotFound, "invalid_reference", "invalid reference number", fmt.Errorf("refNo %q is not a known bill", refNo))
 			return
+		}
+		if amount := findParam(req.Data, "amount"); amount != "" && amount != formatAmount(bill.Amount) {
+			logf(r, "update: WARNING amount %q differs from bill amount %s for refNo=%s", amount, formatAmount(bill.Amount), refNo)
 		}
 		// MarkPaid is atomic and returns false if the bill was already paid,
 		// which prevents a second (double) payment for the same refNo.
 		if !cfg.Bills.MarkPaid(refNo) {
-			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "already_paid", Message: "payment already completed for this reference number"})
+			fail(w, r, http.StatusConflict, "already_paid", "payment already completed for this reference number", fmt.Errorf("refNo %q already paid", refNo))
 			return
 		}
+		logf(r, "update: refNo=%s marked PAID (txn=%s amount=%s)", refNo, req.TransactionID, findParam(req.Data, "amount"))
 
 		resp := UpdateResponse{
 			TransactionID: req.TransactionID,
@@ -450,13 +421,69 @@ func updateHandler(cfg Config) http.HandlerFunc {
 			Message:       "Success",
 			PaymentData:   buildPaymentData(req.Data, req.TransactionID),
 		}
+		debugf(r, "update: response (plaintext, before encryption): %s", toJSON(resp))
 		// Encrypt the response values with the same AES key (spec §3.1.7).
 		if err := encryptPaymentValues(resp.PaymentData, aesKey); err != nil {
-			writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "server_error", Message: "could not encrypt response"})
+			fail(w, r, http.StatusInternalServerError, "server_error", "could not encrypt response", err)
 			return
 		}
+		logf(r, "update: success txn=%s refNo=%s (%d items encrypted)", req.TransactionID, refNo, len(resp.PaymentData))
 		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// decryptRequest runs the checks shared by /presentment and /update: method,
+// content type, bearer token, TransactionKey (RSA) and data[] (AES-CBC). On
+// failure it writes the error response and returns ok=false.
+func decryptRequest(cfg Config, w http.ResponseWriter, r *http.Request, op string) ([]byte, PresentmentRequest, bool) {
+	if r.Method != http.MethodPost {
+		fail(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", fmt.Errorf("got %s", r.Method))
+		return nil, PresentmentRequest{}, false
+	}
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		fail(w, r, http.StatusBadRequest, "bad_request", "Content-Type must be application/json", fmt.Errorf("got %q", r.Header.Get("Content-Type")))
+		return nil, PresentmentRequest{}, false
+	}
+	if err := authorizeBearer(cfg, r); err != nil {
+		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		fail(w, r, http.StatusUnauthorized, "unauthorized", err.Error(), fmt.Errorf("token %s", jwtSummary(token)))
+		return nil, PresentmentRequest{}, false
+	}
+	logf(r, "%s: bearer token accepted", op)
+
+	txnKey := r.Header.Get("TransactionKey")
+	if txnKey == "" {
+		fail(w, r, http.StatusBadRequest, "bad_request", "missing TransactionKey", nil)
+		return nil, PresentmentRequest{}, false
+	}
+
+	// Decrypt the transaction key (RSA) then the request fields (AES-CBC).
+	// Per spec §3.1.6 a decryption/verification failure is 401, not 400.
+	aesKey, err := cfg.Decryptor.DecryptTransactionKey(txnKey)
+	if err != nil {
+		fail(w, r, http.StatusUnauthorized, "unauthorized", "invalid TransactionKey",
+			fmt.Errorf("%v (header %d chars; expect base64 of %d-byte RSA-OAEP-SHA256 ciphertext made with this GO's public key)",
+				err, len(txnKey), cfg.Decryptor.priv.Size()))
+		return nil, PresentmentRequest{}, false
+	}
+	logf(r, "%s: TransactionKey decrypted (AES key %d bytes, sha256=%s)", op, len(aesKey), fingerprint(aesKey))
+	debugf(r, "%s: transaction key=%q derived AES key SHA-256(txnKey)=%x", op, aesKey, deriveAESKey(aesKey))
+
+	req, err := parsePresentmentRequest(r)
+	if err != nil {
+		fail(w, r, http.StatusBadRequest, "bad_request", err.Error(), nil)
+		return nil, PresentmentRequest{}, false
+	}
+	logf(r, "%s: txn=%s subinstId=%s serviceid=%s serviceName=%q data items=%d",
+		op, req.TransactionID, req.SubInstID, req.ServiceID, req.ServiceName, len(req.Data))
+	debugf(r, "%s: data (encrypted): %s", op, toJSON(req.Data))
+
+	if err := cfg.Decryptor.DecryptParams(req.Data, aesKey); err != nil {
+		fail(w, r, http.StatusUnauthorized, "unauthorized", "could not decrypt request values", err)
+		return nil, PresentmentRequest{}, false
+	}
+	logf(r, "%s: data decrypted: %s", op, toJSON(req.Data))
+	return aesKey, req, true
 }
 
 func parsePresentmentRequest(r *http.Request) (PresentmentRequest, error) {
@@ -557,6 +584,18 @@ func findRefNo(params []Param) string {
 		}
 		if v, ok := param.Value.(string); ok {
 			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+// findParam returns the trimmed string value of the named data item, or "".
+func findParam(params []Param, name string) string {
+	for _, param := range params {
+		if strings.TrimSpace(param.ParamName) == name {
+			if v, ok := param.Value.(string); ok {
+				return strings.TrimSpace(v)
+			}
 		}
 	}
 	return ""

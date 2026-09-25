@@ -11,6 +11,9 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}
+      annotations:
+        # Roll the pod when chart-managed key or logging config changes.
+        checksum/config: {{ printf "%s|%s|%s" .Values.encryption.privateKey .Values.encryption.existingSecret .Values.logging.level | sha256sum }}
     spec:
       containers:
         - name: govpay
@@ -43,13 +46,16 @@ spec:
             - name: GOVPAY_IDP_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
-            {{- if or .Values.encryption.existingSecret .Values.encryption.privateKey }}
-            - name: GOVPAY_RSA_PRIVATE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.encryption.existingSecret | default (printf "%s-rsa" .Release.Name) }}
-                  key: {{ .Values.encryption.secretKey | default "privateKey" }}
-            {{- end }}
+            - name: GOVPAY_LOG_LEVEL
+              value: {{ .Values.logging.level | default "info" | quote }}
+            # The GO RSA private key is mounted from the Secret as a read-only
+            # file (see volumes below) rather than passed as an env var.
+            - name: GOVPAY_RSA_PRIVATE_KEY_FILE
+              value: {{ printf "%s/%s" .Values.encryption.mountPath .Values.encryption.fileName | quote }}
+          volumeMounts:
+            - name: rsa-private-key
+              mountPath: {{ .Values.encryption.mountPath }}
+              readOnly: true
           resources:
             requests:
               cpu: {{ .Values.resources.requests.cpu | quote }}
@@ -60,3 +66,15 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: rsa-private-key
+          secret:
+            secretName: {{ .Values.encryption.existingSecret | default (printf "%s-rsa" .Release.Name) }}
+            # Group-readable only; OpenShift's restricted SCC assigns the pod an
+            # fsGroup so the (random) container UID can read it.
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.encryption.secretKey | default "privateKey" }}
+                path: {{ .Values.encryption.fileName }}

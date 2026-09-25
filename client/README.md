@@ -49,8 +49,10 @@ Failure modes follow §3.1.6: a request that fails validation returns **400**; a
 `TransactionKey`/field that fails to decrypt returns **401**.
 
 Algorithm standards (§3.2): RSA-OAEP(SHA-256)/MGF1(SHA-256)/2048 for the key;
-AES-256-CBC with PKCS7 padding and IV = first 16 bytes of the AES key for the
-payload.
+AES-256-CBC with PKCS7 padding for the payload, where the AES key is
+**SHA-256 of the 32-character transaction key** and the IV is the first 16 bytes
+of that derived key. (The spec reads as if the transaction key were used
+directly; the SHA-256 step was confirmed against a live GovPay+ request.)
 
 ### Generating the keypair
 
@@ -64,8 +66,27 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/go_privat
 openssl rsa -in keys/go_private.pem -pubout -out ../server/keys/go_public.pem
 ```
 
-For OpenShift the private key is delivered via a `Secret` (`secretKeyRef`), not a
-file — see the Helm chart's `encryption` values.
+For OpenShift the private key lives in a `Secret` that the chart mounts
+read-only at `/etc/govpay/keys/go_private.pem` (`GOVPAY_RSA_PRIVATE_KEY_FILE`) —
+see the Helm chart's `encryption` values.
+
+## Logging
+
+`GOVPAY_LOG_LEVEL` (`logging.level` in the chart) controls verbosity:
+
+- `info` (default): startup config, RSA key fingerprint + matching public key,
+  the sample bill list, an encryption self-test, one `-->`/`<--` line per request
+  tagged with a request id (also returned as `X-Request-ID`), redacted headers,
+  decrypted request values, and the real cause behind every 4xx/5xx.
+- `debug`: additionally raw (encrypted) request/response bodies, plaintext
+  responses before encryption and the per-transaction AES key. Test data only.
+
+At startup the self-test also logs a ready-to-send encrypted sample presentment
+request (`TransactionKey` + body) for `ABC123456` that works against that pod.
+
+```bash
+oc logs deploy/govpay -n nsw-infra-prod -f
+```
 
 ## IDP / token handling
 
