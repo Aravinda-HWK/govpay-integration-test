@@ -611,14 +611,15 @@ func isAlphaNumeric(s string) bool {
 }
 
 // buildPresentmentData returns the fields to display in the GovPay+ UI for a
-// given bill. The amount is presented (enabled=false) and echoed back to the GO
-// in the update request (returned=true, returnedParam="amount").
+// given bill. Every field is presented read-only (enabled=false) and echoed back
+// to the GO in the update request under its returnedParam; without one GovPay+
+// falls back to the object ID (e.g. "0020002"), which then shows on the receipt.
 func buildPresentmentData(bill *BillRecord) []PresentmentObject {
 	return []PresentmentObject{
 		newPresentmentObject(1, "label", "Reference Number", bill.RefNo, "text", refNoMaxLength, false, true, "refNo", true, false),
-		newPresentmentObject(2, "label", "Taxpayer Name", bill.TaxpayerName, "text", 50, false, false, "", false, false),
-		newPresentmentObject(3, "label", "Tax Type", bill.TaxType, "text", 50, false, false, "", false, false),
-		newPresentmentObject(4, "label", "Billing Period", bill.BillingPeriod, "text", 50, false, false, "", false, false),
+		newPresentmentObject(2, "label", "Taxpayer Name", bill.TaxpayerName, "text", 50, false, true, "name", false, false),
+		newPresentmentObject(3, "label", "Tax Type", bill.TaxType, "text", 50, false, true, "taxType", false, false),
+		newPresentmentObject(4, "label", "Billing Period", bill.BillingPeriod, "text", 50, false, true, "billingPeriod", false, false),
 		newPresentmentObject(5, "textBox", "Amount To Be Paid (LKR)", formatAmount(bill.Amount), "decimal", 13, false, true, "amount", false, true),
 	}
 }
